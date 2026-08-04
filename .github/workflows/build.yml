@@ -1,0 +1,81 @@
+name: build
+
+# 按需编译 sub2api(后端 + 前端),产物上传 artifact。
+# 用法: Actions -> build -> Run workflow (选择分支) ;或 push 到 feat/* 分支自动触发。
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: '要编译的分支 / tag(留空 = 当前分支)'
+        required: false
+        default: ''
+  push:
+    branches:
+      - 'feat/**'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+          fetch-depth: 1
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache: true
+          cache-dependency-path: backend/go.sum
+
+      - name: Build backend
+        working-directory: backend
+        run: |
+          CGO_ENABLED=0 go build -trimpath -o bin/server ./cmd/server
+          file bin/server
+          ls -lh bin/server
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run build
+
+      - name: Package artifacts
+        run: |
+          mkdir -p dist
+          cp backend/bin/server dist/sub2api-server
+          cp -r frontend/dist dist/frontend
+          tar -czf dist/sub2api-build.tar.gz -C dist sub2api-server frontend
+          ls -lh dist/
+
+      - name: Upload backend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sub2api-server
+          path: dist/sub2api-server
+          retention-days: 14
+
+      - name: Upload full build
+        uses: actions/upload-artifact@v4
+        with:
+          name: sub2api-build
+          path: dist/sub2api-build.tar.gz
+          retention-days: 14
