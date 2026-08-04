@@ -1,69 +1,58 @@
 name: build
 
-# 按需编译 sub2api(后端 + 前端),产物上传 artifact。
+# 按需编译 sub2api(后端内嵌前端,单二进制产物),产物上传 artifact。
 # 用法: Actions -> build -> Run workflow (选择分支) ;或 push 到 feat/* 分支自动触发。
 on:
   workflow_dispatch:
     inputs:
       ref:
-        description: '要编译的分支 / tag(留空 = 当前分支)'
+        description: '要编译的分支(默认当前分支)'
         required: false
         default: ''
   push:
-    branches:
-      - 'feat/**'
-
-permissions:
-  contents: read
+    branches: ['feat/**']
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.ref || github.ref }}
-          fetch-depth: 1
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.ref || '' }}
 
-      - name: Setup Go
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: backend/go.mod
-          cache: true
-          cache-dependency-path: backend/go.sum
-
-      - name: Build backend
-        working-directory: backend
-        run: |
-          CGO_ENABLED=0 go build -trimpath -o bin/server ./cmd/server
-          file bin/server
-          ls -lh bin/server
-
+      # ---- 前端(必须先 build:产物 backend/internal/web/dist 会被 Go embed 进二进制) ----
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
-        with:
-          version: 9
-
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: 22
           cache: 'pnpm'
           cache-dependency-path: frontend/pnpm-lock.yaml
-
-      - name: Build frontend
+      - name: Install frontend deps
+        run: pnpm install --frozen-lockfile
         working-directory: frontend
-        run: |
-          pnpm install --frozen-lockfile
-          pnpm run build
+      - name: Build frontend
+        run: pnpm run build
+        working-directory: frontend
 
+      # ---- 后端(内嵌上述前端产物) ----
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - name: Build backend
+        run: |
+          cd backend
+          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o bin/server ./cmd/server
       - name: Package artifacts
         run: |
           mkdir -p dist
           cp backend/bin/server dist/sub2api-server
-          cp -r frontend/dist dist/frontend
-          tar -czf dist/sub2api-build.tar.gz -C dist sub2api-server frontend
+          cp -r backend/internal/web/dist dist/frontend-dist
+          tar -czf dist/sub2api-build.tar.gz -C dist sub2api-server
           ls -lh dist/
 
       - name: Upload backend artifact
@@ -71,11 +60,8 @@ jobs:
         with:
           name: sub2api-server
           path: dist/sub2api-server
-          retention-days: 14
-
       - name: Upload full build
         uses: actions/upload-artifact@v4
         with:
           name: sub2api-build
           path: dist/sub2api-build.tar.gz
-          retention-days: 14
