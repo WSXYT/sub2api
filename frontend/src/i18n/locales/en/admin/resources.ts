@@ -596,5 +596,121 @@ export default {
       }
     },
 
+    relayStations: {
+      title: 'Relay Station Management',
+      description: 'Manage relay stations, group sources, and pricing',
+      tabs: {
+        stations: 'Relay Stations',
+        bindings: 'Group Bindings & Pricing',
+        profit: 'Profit Estimate'
+      },
+      addStation: 'Add Relay Station',
+      testConnection: 'Test Connection',
+      refreshRates: 'Refresh Prices',
+      saveBindings: 'Save Bindings',
+      columns: {
+        name: 'Name',
+        type: 'Type',
+        address: 'Address',
+        status: 'Status',
+        actions: 'Actions',
+        station: 'Source Station',
+        sourceGroup: 'Source Group',
+        enabled: 'Enabled',
+        delta: 'Delta Rate',
+        rate: 'Collected Rate',
+        effectiveRate: 'Adjusted Rate',
+        updatedAt: 'Collected At',
+        group: 'Group',
+        requests: 'Requests',
+        totalCost: 'Base Cost',
+        downstreamRate: 'Downstream Rate',
+        upstreamRate: 'Upstream Rate',
+        revenue: 'Est. Revenue',
+        cost: 'Est. Cost',
+        profit: 'Est. Profit'
+      },
+      types: {
+        aihub: 'aihub-auto',
+        newapi: 'New API',
+        sub2api: 'Official Sub2API'
+      },
+      status: {
+        enabled: 'Enabled',
+        disabled: 'Disabled',
+        configured: 'Configured',
+        active: 'Active',
+        inactive: 'Inactive',
+        ready: 'Ready',
+        unauthenticated: 'Authentication Failed',
+        unavailable: 'Unavailable',
+        stale: 'Stale',
+        unknown: 'No Data'
+      },
+      form: {
+        createTitle: 'Add Relay Station',
+        editTitle: 'Edit Relay Station',
+        name: 'Name',
+        namePlaceholder: 'Enter relay station name',
+        type: 'Type',
+        baseUrl: 'API URL',
+        baseUrlPlaceholder: 'https://relay.example.com',
+        controlUrl: 'Console URL',
+        controlUrlPlaceholder: 'Uses the API URL when empty',
+        uiPassword: 'Console Password',
+        proxyToken: 'API Token',
+        username: 'Account',
+        password: 'Account Password',
+        enabled: 'Enable Relay Station',
+        leaveBlank: 'Leave blank to keep the current setting'
+      },
+      binding: {
+        selectGroup: 'Select Group',
+        selectStation: 'Select Relay Station',
+        addSource: 'Add Source',
+        removeSource: 'Remove',
+        sourceGroupPlaceholder: 'Defaults to default',
+        lowest: 'Lowest',
+        noGroups: 'No Groups Available',
+        noGroupsDescription: 'Create a group in Group Management first.',
+        noSources: 'No Sources Bound',
+        noSourcesDescription: 'Select a relay station above and add it.',
+        sourceGroupInvalid: 'Source group must be 1-100 characters without control characters',
+        deltaInvalid: 'Delta rate must be a valid number'
+      },
+      profit: {
+        startDate: 'Start Date',
+        endDate: 'End Date',
+        load: 'Load',
+        unavailable: 'Not Enabled',
+        unavailableDescription: 'Profit estimation is not enabled by the backend.',
+        noData: 'No Profit Estimates',
+        noDataDescription: 'There is no estimable data in the selected date range.',
+        invalidRange: 'Select a valid date range',
+        loadFailed: 'Failed to load profit estimates'
+      },
+      empty: {
+        title: 'No Relay Stations',
+        description: 'Add the first relay station to configure group sources.'
+      },
+      loadFailed: 'Failed to load relay station configuration',
+      saveFailed: 'Failed to save relay station',
+      createSuccess: 'Relay station created',
+      updateSuccess: 'Relay station updated',
+      deleteTitle: 'Delete Relay Station',
+      deleteMessage: 'Delete relay station \'{name}\'? Its group bindings will also be removed.',
+      deleteSuccess: 'Relay station deleted',
+      deleteFailed: 'Failed to delete relay station',
+      bindingsSaved: 'Group bindings saved',
+      bindingsSaveFailed: 'Failed to save group bindings',
+      ratesRefreshSuccess: 'Prices refreshed',
+      ratesRefreshPartial: 'Some source prices failed to refresh; usable results were kept',
+      ratesRefreshFailed: 'Failed to refresh prices',
+      testSuccess: 'Connection successful',
+      testSuccessWithRates: 'Connection successful; received {count} prices',
+      testFailed: 'Connection failed',
+      testFailedWithReason: 'Connection failed: {reason}'
+    },
+
     // Ops Monitoring
 }

@@ -37,6 +37,22 @@ func TestRelayProxyTargetNormalizesOpenAIAliases(t *testing.T) {
 	}
 }
 
+func TestValidateRelayURLRejectsEmbeddedCredentials(t *testing.T) {
+	service := &RelayStationService{}
+	for _, raw := range []string{
+		"https://user:secret@relay.example",
+		"https://relay.example?token=secret",
+		"https://relay.example#secret",
+	} {
+		if err := service.validateRelayURL(raw); err == nil {
+			t.Fatalf("credential-bearing relay URL %q was accepted", raw)
+		}
+	}
+	if err := service.validateRelayURL("https://relay.example/v1"); err != nil {
+		t.Fatalf("normal relay URL was rejected: %v", err)
+	}
+}
+
 func TestValidateStationRequiresProxyTokenForEveryRelay(t *testing.T) {
 	service := &RelayStationService{}
 	for _, stationType := range []RelayStationType{RelayStationTypeNewAPI, RelayStationTypeSub2API} {

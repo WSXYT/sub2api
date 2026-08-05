@@ -593,5 +593,121 @@ export default {
       }
     },
 
+    relayStations: {
+      title: '中转站管理',
+      description: '管理中转站、分组来源与价格',
+      tabs: {
+        stations: '中转站',
+        bindings: '分组绑定与价格',
+        profit: '盈利估计'
+      },
+      addStation: '新增中转站',
+      testConnection: '测试连接',
+      refreshRates: '刷新价格',
+      saveBindings: '保存绑定',
+      columns: {
+        name: '名称',
+        type: '类型',
+        address: '地址',
+        status: '状态',
+        actions: '操作',
+        station: '来源站',
+        sourceGroup: '来源分组',
+        enabled: '启用',
+        delta: 'Delta 倍率',
+        rate: '采集倍率',
+        effectiveRate: '调整后倍率',
+        updatedAt: '采集时间',
+        group: '分组',
+        requests: '请求数',
+        totalCost: '基础成本',
+        downstreamRate: '下游倍率',
+        upstreamRate: '上游倍率',
+        revenue: '估计收入',
+        cost: '估计成本',
+        profit: '估计盈利'
+      },
+      types: {
+        aihub: 'aihub-auto',
+        newapi: 'New API',
+        sub2api: 'Sub2API 官方'
+      },
+      status: {
+        enabled: '已启用',
+        disabled: '已停用',
+        configured: '已设置',
+        active: '启用',
+        inactive: '停用',
+        ready: '可用',
+        unauthenticated: '认证失败',
+        unavailable: '不可用',
+        stale: '已过期',
+        unknown: '暂无数据'
+      },
+      form: {
+        createTitle: '新增中转站',
+        editTitle: '编辑中转站',
+        name: '名称',
+        namePlaceholder: '输入中转站名称',
+        type: '类型',
+        baseUrl: 'API 地址',
+        baseUrlPlaceholder: 'https://relay.example.com',
+        controlUrl: '控制台地址',
+        controlUrlPlaceholder: '留空时使用 API 地址',
+        uiPassword: '控制台密码',
+        proxyToken: 'API Token',
+        username: '账号',
+        password: '账号密码',
+        enabled: '启用中转站',
+        leaveBlank: '留空保持现有设置'
+      },
+      binding: {
+        selectGroup: '选择分组',
+        selectStation: '选择中转站',
+        addSource: '添加来源站',
+        removeSource: '移除',
+        sourceGroupPlaceholder: '默认 default',
+        lowest: '最低',
+        noGroups: '暂无可绑定分组',
+        noGroupsDescription: '请先在分组管理中创建分组。',
+        noSources: '该分组暂无来源站',
+        noSourcesDescription: '从上方选择一个中转站并添加。',
+        sourceGroupInvalid: '来源分组不能为空、不能超过 100 个字符或包含控制字符',
+        deltaInvalid: 'Delta 倍率必须是有效数字'
+      },
+      profit: {
+        startDate: '开始日期',
+        endDate: '结束日期',
+        load: '查询',
+        unavailable: '暂未启用',
+        unavailableDescription: '后端尚未启用盈利估计。',
+        noData: '暂无盈利估计',
+        noDataDescription: '所选时间范围内没有可估计的数据。',
+        invalidRange: '请选择有效的日期范围',
+        loadFailed: '加载盈利估计失败'
+      },
+      empty: {
+        title: '暂无中转站',
+        description: '添加首个中转站以配置分组来源。'
+      },
+      loadFailed: '加载中转站配置失败',
+      saveFailed: '保存中转站失败',
+      createSuccess: '中转站已创建',
+      updateSuccess: '中转站已更新',
+      deleteTitle: '删除中转站',
+      deleteMessage: '确定要删除中转站“{name}”吗？相关分组绑定也会移除。',
+      deleteSuccess: '中转站已删除',
+      deleteFailed: '删除中转站失败',
+      bindingsSaved: '分组绑定已保存',
+      bindingsSaveFailed: '保存分组绑定失败',
+      ratesRefreshSuccess: '价格已刷新',
+      ratesRefreshPartial: '部分来源价格刷新失败，已保留可用结果',
+      ratesRefreshFailed: '刷新价格失败',
+      testSuccess: '连接成功',
+      testSuccessWithRates: '连接成功，获取到 {count} 条价格',
+      testFailed: '连接失败',
+      testFailedWithReason: '连接失败：{reason}'
+    },
+
     // Ops Monitoring
 }

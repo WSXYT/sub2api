@@ -462,6 +462,18 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/relay-stations',
+    name: 'AdminRelayStations',
+    component: () => import('@/views/admin/RelayStationsView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Relay Station Management',
+      titleKey: 'admin.relayStations.title',
+      descriptionKey: 'admin.relayStations.description'
+    }
+  },
+  {
     path: '/admin/channels',
     redirect: '/admin/channels/pricing'
   },
@@ -927,6 +939,7 @@ router.beforeEach(async (to, _from, next) => {
   if (authStore.isSimpleMode) {
     const restrictedPaths = [
       '/admin/groups',
+      '/admin/relay-stations',
       '/admin/subscriptions',
       '/admin/redeem',
       '/subscriptions',

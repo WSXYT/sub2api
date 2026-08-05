@@ -34,6 +34,14 @@ func (e *relayHTTPStatusError) Error() string {
 }
 
 func (s *RelayStationService) validateRelayURL(raw string) error {
+	relayURL, parseErr := url.Parse(strings.TrimSpace(raw))
+	if parseErr != nil {
+		return parseErr
+	}
+	if relayURL.User != nil || relayURL.RawQuery != "" || relayURL.Fragment != "" {
+		return errors.New("relay station url must not contain userinfo, query, or fragment")
+	}
+
 	allowInsecure := true
 	if s != nil && s.cfg != nil {
 		allowInsecure = s.cfg.Security.URLAllowlist.AllowInsecureHTTP
