@@ -368,7 +368,7 @@ func loginNewAPIStation(ctx context.Context, service *RelayStationService, stati
 	if err != nil {
 		return nil, fmt.Errorf("login newapi station: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return nil, &relayHTTPStatusError{status: resp.StatusCode}
 	}
@@ -406,7 +406,7 @@ func loginSub2APIStation(ctx context.Context, service *RelayStationService, stat
 	if err != nil {
 		return nil, fmt.Errorf("login sub2api station: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return nil, &relayHTTPStatusError{status: response.StatusCode}
 	}
@@ -498,7 +498,7 @@ func (s *RelayStationService) postAIHubConfig(ctx context.Context, station relay
 	if err != nil {
 		return fmt.Errorf("sync aihub configuration: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return &relayHTTPStatusError{status: response.StatusCode}
 	}
