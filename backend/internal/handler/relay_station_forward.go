@@ -60,7 +60,7 @@ func (h *OpenAIGatewayHandler) tryRelayOpenAIForward(c *gin.Context, input relay
 		h.handleStreamingAwareError(c, http.StatusBadGateway, "api_error", "Relay request failed", valueOrFalse(streamStarted))
 		return true
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 
 	result, err := forwardRelayOpenAIResponse(c, response, input, startedAt, streamStarted)
 	if err != nil {
