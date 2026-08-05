@@ -74,7 +74,8 @@ func TestTestStationProbesUnboundAIHub(t *testing.T) {
 	defer upstream.Close()
 
 	service := &RelayStationService{
-		loaded: true,
+		settingRepo: &fakeSettingRepo{},
+		loaded:      true,
 		config: relayStationConfig{Stations: []relayStation{{
 			ID: "aihub", Type: RelayStationTypeAIHub, Name: "AIHub", BaseURL: upstream.URL,
 			ControlURL: upstream.URL, UIPassword: "ui-password", ProxyToken: "proxy-token", Enabled: true,

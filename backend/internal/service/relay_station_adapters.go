@@ -122,7 +122,7 @@ func (s *RelayStationService) fetchAIHubRates(ctx context.Context, station relay
 	if err != nil {
 		return nil, fmt.Errorf("request aihub group prices: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return nil, &relayHTTPStatusError{status: resp.StatusCode}
 	}
@@ -204,7 +204,7 @@ func (s *RelayStationService) requestNewAPIRates(ctx context.Context, station re
 	if err != nil {
 		return nil, 0, fmt.Errorf("request newapi pricing: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return nil, resp.StatusCode, &relayHTTPStatusError{status: resp.StatusCode}
 	}
@@ -269,7 +269,7 @@ func (s *RelayStationService) requestSub2APIRates(ctx context.Context, station r
 	if err != nil {
 		return nil, 0, fmt.Errorf("request sub2api groups: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return nil, resp.StatusCode, &relayHTTPStatusError{status: resp.StatusCode}
 	}
