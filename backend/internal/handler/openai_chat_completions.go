@@ -152,6 +152,26 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 	ccPricingCtx, pricingAt := h.gatewayService.WithOpenAIRequestPricingContext(c.Request.Context(), apiKey.GroupID)
 	c.Request = c.Request.WithContext(ccPricingCtx)
 
+	relayBody := body
+	relayUpstreamModel := reqModel
+	if channelMapping.Mapped {
+		relayBody = h.gatewayService.ReplaceModelInBody(body, channelMapping.MappedModel)
+		relayUpstreamModel = channelMapping.MappedModel
+	}
+	if h.tryRelayOpenAIForward(c, relayOpenAIForwardInput{
+		APIKey:             apiKey,
+		Subscription:       subscription,
+		Body:               relayBody,
+		OriginalModel:      reqModel,
+		UpstreamModel:      relayUpstreamModel,
+		Stream:             reqStream,
+		SessionHash:        sessionHash,
+		PricingAt:          pricingAt,
+		ChannelUsageFields: clientRequestedUsageFields(c, channelMapping, reqModel, relayUpstreamModel),
+	}, &streamStarted) {
+		return
+	}
+
 	for {
 		if failoverClientGone(c) {
 			return

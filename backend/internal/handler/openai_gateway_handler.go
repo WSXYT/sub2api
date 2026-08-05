@@ -31,6 +31,7 @@ import (
 // OpenAIGatewayHandler handles OpenAI API gateway requests
 type OpenAIGatewayHandler struct {
 	gatewayService             *service.OpenAIGatewayService
+	relayService               *service.RelayStationService
 	billingCacheService        *service.BillingCacheService
 	apiKeyService              *service.APIKeyService
 	usageRecordWorkerPool      *service.UsageRecordWorkerPool
@@ -228,6 +229,13 @@ func NewOpenAIGatewayHandler(
 		imageLimiter:             &imageConcurrencyLimiter{},
 		maxAccountSwitches:       maxAccountSwitches,
 		cfg:                      cfg,
+	}
+}
+
+// SetRelayStationService attaches the optional administrator-managed relay service.
+func (h *OpenAIGatewayHandler) SetRelayStationService(relayService *service.RelayStationService) {
+	if h != nil {
+		h.relayService = relayService
 	}
 }
 
@@ -445,6 +453,26 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	// token 计费部分仍受利润门保护，独立图片/视频端点才在门外。
 	pricingCtx, pricingAt := h.gatewayService.WithOpenAIRequestPricingContext(c.Request.Context(), apiKey.GroupID)
 	c.Request = c.Request.WithContext(pricingCtx)
+
+	if !imageIntent {
+		relayUpstreamModel := reqModel
+		if channelMapping.Mapped {
+			relayUpstreamModel = channelMapping.MappedModel
+		}
+		if h.tryRelayOpenAIForward(c, relayOpenAIForwardInput{
+			APIKey:             apiKey,
+			Subscription:       subscription,
+			Body:               forwardBody,
+			OriginalModel:      reqModel,
+			UpstreamModel:      relayUpstreamModel,
+			Stream:             reqStream,
+			SessionHash:        sessionHash,
+			PricingAt:          pricingAt,
+			ChannelUsageFields: clientRequestedUsageFields(c, channelMapping, reqModel, relayUpstreamModel),
+		}, &streamStarted) {
+			return
+		}
+	}
 
 	for {
 		// Streaming Forward intentionally detaches the upstream request so usage can
