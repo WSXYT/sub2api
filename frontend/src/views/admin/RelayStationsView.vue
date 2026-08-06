@@ -98,7 +98,7 @@
                 type="button"
                 class="btn btn-secondary"
                 :disabled="refreshingRates"
-                @click="refreshAllRates"
+                @click="() => refreshAllRates()"
               >
                 <Icon name="refresh" size="md" :class="refreshingRates ? 'animate-spin' : ''" />
                 <span class="ml-2">{{ t('admin.relayStations.refreshRates') }}</span>
