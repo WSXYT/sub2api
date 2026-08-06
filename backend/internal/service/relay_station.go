@@ -25,6 +25,7 @@ const (
 
 	relayStationRatePollInterval = time.Minute
 	relayStationRouteTTL         = 5 * time.Minute
+	defaultAIHubURL              = "http://127.0.0.1:8787"
 )
 
 var (
@@ -258,6 +259,10 @@ type RelayStationService struct {
 	mu     sync.RWMutex
 	loaded bool
 
+	// aihub-auto has one global login, so account switches and request dispatch stay atomic.
+	aihubMu              sync.Mutex
+	activeAIHubStationID string
+
 	config relayStationConfig
 	rates  relayRateCache
 
@@ -425,6 +430,16 @@ func (s *RelayStationService) CreateStation(ctx context.Context, input RelayStat
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}
+	if station.Type == RelayStationTypeAIHub {
+		if station.Username == "" || station.Password == "" {
+			return nil, infraerrors.BadRequest("RELAY_AIHUB_ACCOUNT_REQUIRED", "aihub station requires email and password")
+		}
+		s.applyAIHubConnectionDefaults(&station)
+	} else if station.Type == RelayStationTypeNewAPI || station.Type == RelayStationTypeSub2API {
+		if station.BaseURL == "" || station.ControlURL == "" {
+			return nil, infraerrors.BadRequest("RELAY_ENDPOINTS_REQUIRED", "newapi and sub2api stations require base_url and control_url")
+		}
+	}
 	if station.ControlURL == "" {
 		station.ControlURL = station.BaseURL
 	}
@@ -503,8 +518,12 @@ func (s *RelayStationService) UpdateStation(ctx context.Context, id string, inpu
 	s.config = candidate
 	s.clearRoutesLocked()
 	delete(s.sessions, id)
+	stationType := station.Type
 	view := station.view()
 	s.mu.Unlock()
+	if stationType == RelayStationTypeAIHub {
+		s.clearActiveAIHubStation(id)
+	}
 	return &view, nil
 }
 
@@ -520,6 +539,7 @@ func (s *RelayStationService) DeleteStation(ctx context.Context, id string) erro
 		s.mu.Unlock()
 		return ErrRelayStationNotFound
 	}
+	stationType := candidate.Stations[index].Type
 	candidate.Stations = append(candidate.Stations[:index], candidate.Stations[index+1:]...)
 	candidate.Bindings = removeRelayStationFromBindings(candidate.Bindings, id)
 	if err := s.validateConfig(&candidate); err != nil {
@@ -538,6 +558,9 @@ func (s *RelayStationService) DeleteStation(ctx context.Context, id string) erro
 	delete(s.sessions, id)
 	s.clearRoutesLocked()
 	s.mu.Unlock()
+	if stationType == RelayStationTypeAIHub {
+		s.clearActiveAIHubStation(id)
+	}
 	return nil
 }
 
@@ -571,6 +594,7 @@ func (s *RelayStationService) UpdateBindings(ctx context.Context, bindings []Rel
 	s.clearRoutesLocked()
 	result := cloneRelayBindings(candidate.Bindings)
 	s.mu.Unlock()
+	s.clearActiveAIHubStation("")
 	return result, nil
 }
 
@@ -1054,6 +1078,10 @@ func (s *RelayStationService) validateStation(station *relayStation) error {
 	station.Name = strings.TrimSpace(station.Name)
 	station.BaseURL = strings.TrimSpace(station.BaseURL)
 	station.ControlURL = strings.TrimSpace(station.ControlURL)
+	station.UIPassword = strings.TrimSpace(station.UIPassword)
+	station.ProxyToken = strings.TrimSpace(station.ProxyToken)
+	station.Username = strings.TrimSpace(station.Username)
+	station.Password = strings.TrimSpace(station.Password)
 	if station.ID == "" || station.Name == "" || len(station.Name) > 100 {
 		return infraerrors.BadRequest("RELAY_STATION_INVALID", "relay station id and name are required")
 	}
@@ -1066,20 +1094,65 @@ func (s *RelayStationService) validateStation(station *relayStation) error {
 	if err := s.validateRelayURL(station.ControlURL); err != nil {
 		return infraerrors.BadRequest("RELAY_CONTROL_URL_INVALID", "relay station control_url is invalid")
 	}
-	if station.ProxyToken == "" {
-		return infraerrors.BadRequest("RELAY_PROXY_TOKEN_REQUIRED", "relay station requires a proxy_token for upstream forwarding")
-	}
 	switch station.Type {
-	case RelayStationTypeAIHub:
-		if station.UIPassword == "" {
-			return infraerrors.BadRequest("RELAY_AIHUB_CREDENTIALS_REQUIRED", "aihub station requires ui_password")
-		}
 	case RelayStationTypeNewAPI, RelayStationTypeSub2API:
 		if station.Username == "" || station.Password == "" {
 			return infraerrors.BadRequest("RELAY_LOGIN_CREDENTIALS_REQUIRED", "newapi and sub2api stations require username and password")
 		}
 	}
 	return nil
+}
+
+func (s *RelayStationService) applyAIHubConnectionDefaults(station *relayStation) {
+	if station == nil || station.Type != RelayStationTypeAIHub {
+		return
+	}
+	fill := func(baseURL, controlURL, uiPassword, proxyToken string) {
+		if station.BaseURL == "" {
+			station.BaseURL = strings.TrimSpace(baseURL)
+		}
+		if station.ControlURL == "" {
+			station.ControlURL = strings.TrimSpace(controlURL)
+		}
+		if station.UIPassword == "" {
+			station.UIPassword = strings.TrimSpace(uiPassword)
+		}
+		if station.ProxyToken == "" {
+			station.ProxyToken = strings.TrimSpace(proxyToken)
+		}
+	}
+
+	if s != nil && s.cfg != nil {
+		aihub := s.cfg.Relay.AIHub
+		if aihub.BaseURL != "" {
+			station.BaseURL = aihub.BaseURL
+		}
+		if aihub.ControlURL != "" {
+			station.ControlURL = aihub.ControlURL
+		}
+		if aihub.UIPassword != "" {
+			station.UIPassword = aihub.UIPassword
+		}
+		if aihub.ProxyToken != "" {
+			station.ProxyToken = aihub.ProxyToken
+		}
+	}
+	if s != nil {
+		s.mu.RLock()
+		stations := append([]relayStation(nil), s.config.Stations...)
+		s.mu.RUnlock()
+		for _, existing := range stations {
+			if existing.Type == RelayStationTypeAIHub {
+				fill(existing.BaseURL, existing.ControlURL, existing.UIPassword, existing.ProxyToken)
+			}
+		}
+	}
+	if station.BaseURL == "" {
+		station.BaseURL = defaultAIHubURL
+	}
+	if station.ControlURL == "" {
+		station.ControlURL = station.BaseURL
+	}
 }
 
 func validateRelayPriceBand(band *RelayPriceBand) error {

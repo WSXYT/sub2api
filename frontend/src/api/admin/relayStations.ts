@@ -30,10 +30,10 @@ export interface RelayStation {
 export interface RelayStationCreateInput {
 	type: RelayStationType;
 	name: string;
-	base_url: string;
-	control_url: string;
-	ui_password: string;
-	proxy_token: string;
+	base_url?: string;
+	control_url?: string;
+	ui_password?: string;
+	proxy_token?: string;
 	username: string;
 	password: string;
 	enabled: boolean;

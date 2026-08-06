@@ -101,6 +101,20 @@ webauthn:
 run_mode: "standard"
 
 # =============================================================================
+# Relay Sidecar Configuration
+# 中转 Sidecar 配置
+# =============================================================================
+# AIHub accounts are managed in the admin relay-station page. These shared
+# values connect every AIHub account to the same aihub-auto sidecar.
+# AIHub 账号在管理员中转站页面维护；以下共享参数用于连接同一个 aihub-auto sidecar。
+relay:
+  aihub:
+    base_url: "http://127.0.0.1:8787"
+    control_url: "http://127.0.0.1:8787"
+    ui_password: ""
+    proxy_token: ""
+
+# =============================================================================
 # CORS Configuration
 # 跨域资源共享 (CORS) 配置
 # =============================================================================

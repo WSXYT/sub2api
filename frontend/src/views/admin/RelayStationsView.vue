@@ -453,7 +453,7 @@
           </div>
         </div>
 
-        <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+        <div v-if="showConnectionFields" class="grid grid-cols-1 gap-4 md:grid-cols-2">
           <div>
             <label for="relay-station-base-url" class="input-label">
               {{ t('admin.relayStations.form.baseUrl') }} <span class="text-red-500">*</span>
@@ -470,26 +470,77 @@
           </div>
           <div>
             <label for="relay-station-control-url" class="input-label">
-              {{ t('admin.relayStations.form.controlUrl') }}
+              {{ t('admin.relayStations.form.controlUrl') }} <span class="text-red-500">*</span>
             </label>
             <input
               id="relay-station-control-url"
               v-model="stationForm.control_url"
               type="url"
               maxlength="2048"
+              required
               class="input"
               :placeholder="t('admin.relayStations.form.controlUrlPlaceholder')"
             />
           </div>
         </div>
 
-        <div class="border-t border-gray-200 pt-5 dark:border-dark-700">
+        <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div>
+            <div class="mb-1.5 flex items-center gap-2">
+              <label for="relay-station-username" class="input-label mb-0">
+                {{ accountLabel }}
+                <span v-if="loginCredentialsRequired" class="text-red-500">*</span>
+              </label>
+              <span v-if="credentialConfigured('username')" class="badge badge-success">
+                {{ t('admin.relayStations.status.configured') }}
+              </span>
+            </div>
+            <input
+              id="relay-station-username"
+              v-model="stationForm.username"
+              :type="stationForm.type === 'aihub' ? 'email' : 'text'"
+              maxlength="512"
+              :required="loginCredentialsRequired"
+              autocomplete="username"
+              class="input"
+              :placeholder="accountPlaceholder"
+            />
+            <p v-if="credentialConfigured('username')" class="input-hint mt-1.5">
+              {{ t('admin.relayStations.form.leaveBlank') }}
+            </p>
+          </div>
+          <div>
+            <div class="mb-1.5 flex items-center gap-2">
+              <label for="relay-station-password" class="input-label mb-0">
+                {{ t('admin.relayStations.form.password') }}
+                <span v-if="loginPasswordRequired" class="text-red-500">*</span>
+              </label>
+              <span v-if="credentialConfigured('password')" class="badge badge-success">
+                {{ t('admin.relayStations.status.configured') }}
+              </span>
+            </div>
+            <input
+              id="relay-station-password"
+              v-model="stationForm.password"
+              type="password"
+              maxlength="4096"
+              :required="loginPasswordRequired"
+              autocomplete="new-password"
+              class="input"
+              :placeholder="t('admin.relayStations.form.passwordPlaceholder')"
+            />
+            <p v-if="credentialConfigured('password')" class="input-hint mt-1.5">
+              {{ t('admin.relayStations.form.leaveBlank') }}
+            </p>
+          </div>
+        </div>
+
+        <div v-if="showLegacySecrets" class="border-t border-gray-200 pt-5 dark:border-dark-700">
           <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <div>
+            <div v-if="showUIPasswordField">
               <div class="mb-1.5 flex items-center gap-2">
                 <label for="relay-station-ui-password" class="input-label mb-0">
                   {{ t('admin.relayStations.form.uiPassword') }}
-                  <span v-if="uiPasswordRequired" class="text-red-500">*</span>
                 </label>
                 <span v-if="credentialConfigured('ui_password')" class="badge badge-success">
                   {{ t('admin.relayStations.status.configured') }}
@@ -500,7 +551,6 @@
                 v-model="stationForm.ui_password"
                 type="password"
                 maxlength="2048"
-                :required="uiPasswordRequired"
                 autocomplete="new-password"
                 class="input"
               />
@@ -508,11 +558,10 @@
                 {{ t('admin.relayStations.form.leaveBlank') }}
               </p>
             </div>
-            <div>
+            <div v-if="showProxyTokenField">
               <div class="mb-1.5 flex items-center gap-2">
                 <label for="relay-station-proxy-token" class="input-label mb-0">
                   {{ t('admin.relayStations.form.proxyToken') }}
-                  <span v-if="proxyTokenRequired" class="text-red-500">*</span>
                 </label>
                 <span v-if="credentialConfigured('proxy_token')" class="badge badge-success">
                   {{ t('admin.relayStations.status.configured') }}
@@ -523,7 +572,6 @@
                 v-model="stationForm.proxy_token"
                 type="password"
                 maxlength="4096"
-                :required="proxyTokenRequired"
                 autocomplete="new-password"
                 class="input"
               />
@@ -531,56 +579,13 @@
                 {{ t('admin.relayStations.form.leaveBlank') }}
               </p>
             </div>
-            <div>
-              <div class="mb-1.5 flex items-center gap-2">
-                <label for="relay-station-username" class="input-label mb-0">
-                  {{ t('admin.relayStations.form.username') }}
-                  <span v-if="loginCredentialsRequired" class="text-red-500">*</span>
-                </label>
-                <span v-if="credentialConfigured('username')" class="badge badge-success">
-                  {{ t('admin.relayStations.status.configured') }}
-                </span>
-              </div>
-              <input
-                id="relay-station-username"
-                v-model="stationForm.username"
-                type="text"
-                maxlength="512"
-                :required="loginCredentialsRequired"
-                autocomplete="off"
-                class="input"
-              />
-              <p v-if="credentialConfigured('username')" class="input-hint mt-1.5">
-                {{ t('admin.relayStations.form.leaveBlank') }}
-              </p>
-            </div>
-            <div>
-              <div class="mb-1.5 flex items-center gap-2">
-                <label for="relay-station-password" class="input-label mb-0">
-                  {{ t('admin.relayStations.form.password') }}
-                  <span v-if="loginPasswordRequired" class="text-red-500">*</span>
-                </label>
-                <span v-if="credentialConfigured('password')" class="badge badge-success">
-                  {{ t('admin.relayStations.status.configured') }}
-                </span>
-              </div>
-              <input
-                id="relay-station-password"
-                v-model="stationForm.password"
-                type="password"
-                maxlength="4096"
-                :required="loginPasswordRequired"
-                autocomplete="new-password"
-                class="input"
-              />
-              <p v-if="credentialConfigured('password')" class="input-hint mt-1.5">
-                {{ t('admin.relayStations.form.leaveBlank') }}
-              </p>
-            </div>
           </div>
         </div>
 
-        <label class="flex items-center justify-between gap-4 border-t border-gray-200 pt-5 dark:border-dark-700">
+        <label
+          v-if="editingStation"
+          class="flex items-center justify-between gap-4 border-t border-gray-200 pt-5 dark:border-dark-700"
+        >
           <span class="font-medium text-gray-700 dark:text-gray-300">
             {{ t('admin.relayStations.form.enabled') }}
           </span>
@@ -775,26 +780,39 @@ const availableStationOptions = computed(() => {
     }))
 })
 
-const proxyTokenRequired = computed(
-  () => !credentialConfigured('proxy_token') && !stationForm.proxy_token.trim()
+const accountLabel = computed(() =>
+  t(stationForm.type === 'aihub'
+    ? 'admin.relayStations.form.aihubEmail'
+    : 'admin.relayStations.form.username')
 )
-const uiPasswordRequired = computed(
+const accountPlaceholder = computed(() =>
+  t(stationForm.type === 'aihub'
+    ? 'admin.relayStations.form.aihubEmailPlaceholder'
+    : 'admin.relayStations.form.usernamePlaceholder')
+)
+const showConnectionFields = computed(
+  () => stationForm.type !== 'aihub' || !!editingStation.value
+)
+const showUIPasswordField = computed(
   () =>
-    stationForm.type === 'aihub' &&
-    !credentialConfigured('ui_password') &&
-    !stationForm.ui_password.trim()
+    !!editingStation.value &&
+    (stationForm.type === 'aihub' || credentialConfigured('ui_password'))
+)
+const showProxyTokenField = computed(
+  () =>
+    !!editingStation.value &&
+    (stationForm.type === 'aihub' || credentialConfigured('proxy_token'))
+)
+const showLegacySecrets = computed(
+  () => showUIPasswordField.value || showProxyTokenField.value
 )
 const loginCredentialsRequired = computed(
-  () =>
-    stationForm.type !== 'aihub' &&
-    !credentialConfigured('username') &&
-    !stationForm.username.trim()
+  () => !editingStation.value ||
+    (stationForm.type !== 'aihub' && !credentialConfigured('username'))
 )
 const loginPasswordRequired = computed(
-  () =>
-    stationForm.type !== 'aihub' &&
-    !credentialConfigured('password') &&
-    !stationForm.password.trim()
+  () => !editingStation.value ||
+    (stationForm.type !== 'aihub' && !credentialConfigured('password'))
 )
 
 const lowestSourceKey = computed(() => {
@@ -998,27 +1016,29 @@ async function saveStation(): Promise<void> {
     if (editingStation.value) {
       const payload: RelayStationUpdateInput = {
         name: stationForm.name.trim(),
-        base_url: stationForm.base_url.trim(),
-        control_url: stationForm.control_url.trim(),
-        ui_password: stationForm.ui_password,
-        proxy_token: stationForm.proxy_token,
         username: stationForm.username,
         password: stationForm.password,
         enabled: stationForm.enabled
       }
+      if (showConnectionFields.value) {
+        payload.base_url = stationForm.base_url.trim()
+        payload.control_url = stationForm.control_url.trim()
+      }
+      if (showUIPasswordField.value) payload.ui_password = stationForm.ui_password
+      if (showProxyTokenField.value) payload.proxy_token = stationForm.proxy_token
       await adminAPI.relayStations.update(editingStation.value.id, payload)
       appStore.showSuccess(t('admin.relayStations.updateSuccess'))
     } else {
       const payload: RelayStationCreateInput = {
         type: stationForm.type,
         name: stationForm.name.trim(),
-        base_url: stationForm.base_url.trim(),
-        control_url: stationForm.control_url.trim(),
-        ui_password: stationForm.ui_password.trim(),
-        proxy_token: stationForm.proxy_token.trim(),
         username: stationForm.username.trim(),
         password: stationForm.password.trim(),
-        enabled: stationForm.enabled
+        enabled: true
+      }
+      if (stationForm.type !== 'aihub') {
+        payload.base_url = stationForm.base_url.trim()
+        payload.control_url = stationForm.control_url.trim()
       }
       await adminAPI.relayStations.create(payload)
       appStore.showSuccess(t('admin.relayStations.createSuccess'))

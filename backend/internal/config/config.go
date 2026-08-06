@@ -84,6 +84,7 @@ type Config struct {
 	RateLimit               RateLimitConfig               `mapstructure:"rate_limit"`
 	Pricing                 PricingConfig                 `mapstructure:"pricing"`
 	Gateway                 GatewayConfig                 `mapstructure:"gateway"`
+	Relay                   RelayConfig                   `mapstructure:"relay"`
 	APIKeyAuth              APIKeyAuthCacheConfig         `mapstructure:"api_key_auth_cache"`
 	SubscriptionCache       SubscriptionCacheConfig       `mapstructure:"subscription_cache"`
 	SubscriptionMaintenance SubscriptionMaintenanceConfig `mapstructure:"subscription_maintenance"`
@@ -160,6 +161,17 @@ type UpdateConfig struct {
 	// 支持 http/https/socks5/socks5h 协议
 	// 例如: "http://127.0.0.1:7890", "socks5://127.0.0.1:1080"
 	ProxyURL string `mapstructure:"proxy_url"`
+}
+
+type RelayConfig struct {
+	AIHub RelayAIHubConfig `mapstructure:"aihub"`
+}
+
+type RelayAIHubConfig struct {
+	BaseURL    string `mapstructure:"base_url"`
+	ControlURL string `mapstructure:"control_url"`
+	UIPassword string `mapstructure:"ui_password"`
+	ProxyToken string `mapstructure:"proxy_token"`
 }
 
 type IdempotencyConfig struct {
@@ -1753,6 +1765,10 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	cfg.OIDC.UsePKCEExplicit = hasExplicitConfigOrEnv("oidc_connect.use_pkce", "OIDC_CONNECT_USE_PKCE")
 	cfg.OIDC.ValidateIDTokenExplicit = hasExplicitConfigOrEnv("oidc_connect.validate_id_token", "OIDC_CONNECT_VALIDATE_ID_TOKEN")
 	cfg.Dashboard.KeyPrefix = strings.TrimSpace(cfg.Dashboard.KeyPrefix)
+	cfg.Relay.AIHub.BaseURL = strings.TrimSpace(cfg.Relay.AIHub.BaseURL)
+	cfg.Relay.AIHub.ControlURL = strings.TrimSpace(cfg.Relay.AIHub.ControlURL)
+	cfg.Relay.AIHub.UIPassword = strings.TrimSpace(cfg.Relay.AIHub.UIPassword)
+	cfg.Relay.AIHub.ProxyToken = strings.TrimSpace(cfg.Relay.AIHub.ProxyToken)
 	cfg.CORS.AllowedOrigins = normalizeStringSlice(cfg.CORS.AllowedOrigins)
 	cfg.Security.ResponseHeaders.AdditionalAllowed = normalizeStringSlice(cfg.Security.ResponseHeaders.AdditionalAllowed)
 	cfg.Security.ResponseHeaders.ForceRemove = normalizeStringSlice(cfg.Security.ResponseHeaders.ForceRemove)
@@ -1906,6 +1922,13 @@ func setDefaults() {
 	// CORS
 	viper.SetDefault("cors.allowed_origins", []string{})
 	viper.SetDefault("cors.allow_credentials", true)
+
+	// Relay sidecars. Empty values let an existing legacy AIHub station provide
+	// the shared connection settings; otherwise the service falls back to localhost.
+	viper.SetDefault("relay.aihub.base_url", "")
+	viper.SetDefault("relay.aihub.control_url", "")
+	viper.SetDefault("relay.aihub.ui_password", "")
+	viper.SetDefault("relay.aihub.proxy_token", "")
 
 	// WebAuthn / Passkeys are opt-in because every deployment must explicitly
 	// declare its relying-party domain and trusted browser origins.

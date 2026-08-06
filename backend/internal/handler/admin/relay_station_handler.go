@@ -23,7 +23,7 @@ func NewRelayStationHandler(relayService *service.RelayStationService) *RelaySta
 type createRelayStationRequest struct {
 	Type       service.RelayStationType `json:"type" binding:"required,oneof=aihub newapi sub2api"`
 	Name       string                   `json:"name" binding:"required,max=100"`
-	BaseURL    string                   `json:"base_url" binding:"required,max=2048"`
+	BaseURL    string                   `json:"base_url" binding:"omitempty,max=2048"`
 	ControlURL string                   `json:"control_url" binding:"omitempty,max=2048"`
 	UIPassword string                   `json:"ui_password" binding:"omitempty,max=2048"`
 	ProxyToken string                   `json:"proxy_token" binding:"omitempty,max=4096"`
