@@ -48,7 +48,7 @@ jobs:
       - name: Build backend
         run: |
           cd backend
-          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o bin/server ./cmd/server
+          CGO_ENABLED=0 go build -tags embed -trimpath -ldflags="-s -w" -o bin/server ./cmd/server
       - name: Package artifacts
         run: |
           mkdir -p dist
