@@ -131,7 +131,7 @@ func (s *RelayStationService) fetchAIHubRates(ctx context.Context, station relay
 		}
 	}
 
-	endpoint, err := relayEndpoint(station.ControlURL, "/ctl/group-prices")
+	endpoint, err := relayEndpoint(station.ControlURL, "/ctl/status")
 	if err != nil {
 		return nil, err
 	}
@@ -143,9 +143,13 @@ func (s *RelayStationService) fetchAIHubRates(ctx context.Context, station relay
 		return nil, err
 	}
 	req.Header.Set("x-ui-password", station.UIPassword)
-	resp, err := newRelayProxyClient().Do(req)
+	client, err := newRelayControlClient()
 	if err != nil {
-		return nil, fmt.Errorf("request aihub group prices: %w", err)
+		return nil, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request aihub status: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
@@ -153,26 +157,86 @@ func (s *RelayStationService) fetchAIHubRates(ctx context.Context, station relay
 	}
 
 	var payload struct {
-		Default relayAIHubGroupPrice            `json:"default"`
-		Groups  map[string]relayAIHubGroupPrice `json:"groups"`
+		CurrentGroupID *int64                      `json:"currentGroupId"`
+		CurrentCode    string                      `json:"currentCode"`
+		Candidates     []relayAIHubStatusCandidate `json:"candidates"`
 	}
 	if err := decodeRelayJSON(resp.Body, &payload); err != nil {
 		return nil, err
 	}
+
+	candidates := make(map[string]relayAIHubStatusCandidate, len(payload.Candidates))
+	candidatesByGroupID := make(map[int64]relayAIHubStatusCandidate, len(payload.Candidates))
+	for _, candidate := range payload.Candidates {
+		candidates[candidate.Code] = candidate
+		candidatesByGroupID[candidate.GroupID] = candidate
+	}
+	current, currentFound := candidates[payload.CurrentCode]
+	if !currentFound && payload.CurrentGroupID != nil {
+		current, currentFound = candidatesByGroupID[*payload.CurrentGroupID]
+	}
+
 	result := make(map[string]RelayStationRate, len(required))
 	for sourceGroup := range required {
-		price := payload.Default
-		if sourceGroup != "default" {
-			price = payload.Groups[sourceGroup]
+		candidate, found := candidates[sourceGroup]
+		if sourceGroup == "default" {
+			candidate, found = current, currentFound
 		}
-		status := normalizeRelayRateStatus(price.Status)
-		rate := price.LowestRate
-		if status != RelayRateStatusReady {
-			rate = nil
+		if !found || candidate.Rate == nil || candidate.Excluded {
+			result[sourceGroup] = RelayStationRate{Status: RelayRateStatusUnavailable}
+			continue
 		}
-		result[sourceGroup] = RelayStationRate{Rate: cloneFloat64(rate), Status: status}
+		result[sourceGroup] = RelayStationRate{Rate: cloneFloat64(candidate.Rate), Status: RelayRateStatusReady}
 	}
 	return result, nil
+}
+
+func (s *RelayStationService) fetchAIHubBalance(ctx context.Context, station relayStation) (*float64, error) {
+	s.applyAIHubConnectionDefaults(&station)
+	s.aihubMu.Lock()
+	defer s.aihubMu.Unlock()
+	switched, err := s.activateAIHubStationLocked(ctx, station)
+	if err != nil {
+		return nil, err
+	}
+	if switched && station.Username != "" {
+		if err := s.postAIHubConfigRequest(ctx, station, s.aiHubGroupsForStation(station.ID)); err != nil {
+			s.activeAIHubStationID = ""
+			return nil, err
+		}
+	}
+
+	endpoint, err := relayEndpoint(station.ControlURL, "/ctl/account")
+	if err != nil {
+		return nil, err
+	}
+	if err := s.validateRelayURL(endpoint); err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("x-ui-password", station.UIPassword)
+	client, err := newRelayControlClient()
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request aihub account: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, &relayHTTPStatusError{status: resp.StatusCode}
+	}
+	var payload struct {
+		Balance *float64 `json:"balance"`
+	}
+	if err := decodeRelayJSON(resp.Body, &payload); err != nil {
+		return nil, err
+	}
+	return cloneFloat64(payload.Balance), nil
 }
 
 func (s *RelayStationService) activateAIHubStationLocked(ctx context.Context, station relayStation) (bool, error) {
@@ -242,22 +306,11 @@ func (s *RelayStationService) aiHubGroupsForStation(stationID string) map[string
 	return groups
 }
 
-type relayAIHubGroupPrice struct {
-	Status     string   `json:"status"`
-	LowestRate *float64 `json:"lowestRate"`
-}
-
-func normalizeRelayRateStatus(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case RelayRateStatusReady:
-		return RelayRateStatusReady
-	case RelayRateStatusUnauthenticated:
-		return RelayRateStatusUnauthenticated
-	case RelayRateStatusStale:
-		return RelayRateStatusStale
-	default:
-		return RelayRateStatusUnavailable
-	}
+type relayAIHubStatusCandidate struct {
+	GroupID  int64    `json:"groupId"`
+	Code     string   `json:"code"`
+	Rate     *float64 `json:"rate"`
+	Excluded bool     `json:"excluded"`
 }
 
 func (s *RelayStationService) fetchNewAPIRates(ctx context.Context, station relayStation, required map[string]struct{}) (map[string]RelayStationRate, error) {

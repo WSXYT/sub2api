@@ -612,6 +612,7 @@ export default {
         name: 'Name',
         type: 'Type',
         address: 'Address',
+        balance: 'Balance',
         status: 'Status',
         actions: 'Actions',
         station: 'Source Station',

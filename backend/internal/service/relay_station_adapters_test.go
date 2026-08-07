@@ -84,13 +84,13 @@ func TestTestStationProbesUnboundAIHub(t *testing.T) {
 	requests := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
-		if r.URL.Path != "/ctl/group-prices" {
+		if r.URL.Path != "/ctl/status" {
 			t.Fatalf("unexpected test endpoint: %s", r.URL.Path)
 		}
 		if r.Header.Get("x-ui-password") != "ui-password" {
 			t.Fatal("aihub test request did not authenticate")
 		}
-		_, _ = w.Write([]byte(`{"default":{"status":"ready","lowestRate":0.1},"groups":{}}`))
+		_, _ = w.Write([]byte(`{"currentGroupId":1,"currentCode":"default","candidates":[{"groupId":1,"code":"default","rate":0.1}]}`))
 	}))
 	defer upstream.Close()
 
@@ -130,12 +130,12 @@ func TestFetchAIHubRatesSwitchesAccounts(t *testing.T) {
 			_, _ = w.Write([]byte(`{"ok":true}`))
 		case "/ctl/config":
 			_, _ = w.Write([]byte(`{"ok":true}`))
-		case "/ctl/group-prices":
+		case "/ctl/status":
 			rate := 0.1
 			if activeEmail == "two@example.com" {
 				rate = 0.2
 			}
-			_, _ = w.Write([]byte(`{"default":{"status":"ready","lowestRate":` + fmt.Sprint(rate) + `},"groups":{}}`))
+			_, _ = w.Write([]byte(`{"currentGroupId":1,"currentCode":"default","candidates":[{"groupId":1,"code":"default","rate":` + fmt.Sprint(rate) + `}]}`))
 		default:
 			t.Errorf("unexpected aihub endpoint: %s", r.URL.Path)
 		}
@@ -163,6 +163,95 @@ func TestFetchAIHubRatesSwitchesAccounts(t *testing.T) {
 	}
 	if loginCount != 3 {
 		t.Fatalf("aihub login count = %d, want 3", loginCount)
+	}
+}
+
+func TestFetchAIHubRatesReadsCurrentAndNamedCandidates(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/ctl/status" {
+			t.Fatalf("unexpected aihub endpoint: %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"currentGroupId":2,"currentCode":"premium","candidates":[{"groupId":1,"code":"standard","rate":0.1},{"groupId":2,"code":"premium","rate":0.2},{"groupId":3,"code":"blocked","rate":0.3,"excluded":true}]}`))
+	}))
+	defer upstream.Close()
+
+	rates, err := (&RelayStationService{}).fetchAIHubRates(context.Background(), relayStation{
+		ID: "aihub", Type: RelayStationTypeAIHub, BaseURL: upstream.URL, ControlURL: upstream.URL,
+	}, map[string]struct{}{"default": {}, "premium": {}, "blocked": {}, "missing": {}})
+	if err != nil {
+		t.Fatalf("fetchAIHubRates: %v", err)
+	}
+	for _, sourceGroup := range []string{"default", "premium"} {
+		if rate := rates[sourceGroup].Rate; rate == nil || *rate != 0.2 || rates[sourceGroup].Status != RelayRateStatusReady {
+			t.Fatalf("%s rate = %#v, want ready 0.2", sourceGroup, rates[sourceGroup])
+		}
+	}
+	for _, sourceGroup := range []string{"blocked", "missing"} {
+		if rates[sourceGroup].Rate != nil || rates[sourceGroup].Status != RelayRateStatusUnavailable {
+			t.Fatalf("%s rate = %#v, want unavailable", sourceGroup, rates[sourceGroup])
+		}
+	}
+}
+
+func TestListStationsReadsSeparateAIHubBalances(t *testing.T) {
+	activeEmail := ""
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/ctl/login":
+			var input struct {
+				Email string `json:"email"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+				t.Errorf("decode aihub login: %v", err)
+			}
+			activeEmail = input.Email
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		case "/ctl/config":
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		case "/ctl/account":
+			if r.Header.Get("x-ui-password") != "ui-password" {
+				t.Fatal("aihub account request did not authenticate")
+			}
+			balance := 1.25
+			if activeEmail == "two@example.com" {
+				balance = 2.5
+			}
+			_, _ = w.Write([]byte(`{"email":"` + activeEmail + `","balance":` + fmt.Sprint(balance) + `}`))
+		default:
+			t.Errorf("unexpected aihub endpoint: %s", r.URL.Path)
+		}
+	}))
+	defer upstream.Close()
+
+	service := &RelayStationService{
+		settingRepo: &fakeSettingRepo{},
+		loaded:      true,
+		config: relayStationConfig{Stations: []relayStation{
+			{ID: "one", Type: RelayStationTypeAIHub, Name: "One", BaseURL: upstream.URL, ControlURL: upstream.URL, UIPassword: "ui-password", Username: "one@example.com", Password: "one"},
+			{ID: "two", Type: RelayStationTypeAIHub, Name: "Two", BaseURL: upstream.URL, ControlURL: upstream.URL, UIPassword: "ui-password", Username: "two@example.com", Password: "two"},
+			{ID: "legacy", Type: RelayStationTypeAIHub, Name: "Legacy", BaseURL: upstream.URL, ControlURL: upstream.URL, UIPassword: "ui-password", Username: "legacy@example.com"},
+			{ID: "newapi", Type: RelayStationTypeNewAPI, Name: "NewAPI", BaseURL: upstream.URL, ControlURL: upstream.URL},
+		}},
+	}
+	stations, err := service.ListStations(context.Background())
+	if err != nil {
+		t.Fatalf("ListStations: %v", err)
+	}
+	balances := make(map[string]*float64, len(stations))
+	for _, station := range stations {
+		balances[station.ID] = station.Balance
+	}
+	if balance := balances["one"]; balance == nil || *balance != 1.25 {
+		t.Fatalf("first aihub balance = %v, want 1.25", balance)
+	}
+	if balance := balances["two"]; balance == nil || *balance != 2.5 {
+		t.Fatalf("second aihub balance = %v, want 2.5", balance)
+	}
+	if balances["legacy"] != nil {
+		t.Fatalf("legacy aihub balance = %v, want nil", balances["legacy"])
+	}
+	if balances["newapi"] != nil {
+		t.Fatalf("newapi balance = %v, want nil", balances["newapi"])
 	}
 }
 

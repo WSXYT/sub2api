@@ -609,6 +609,7 @@ export default {
         name: '名称',
         type: '类型',
         address: '地址',
+        balance: '余额',
         status: '状态',
         actions: '操作',
         station: '来源站',

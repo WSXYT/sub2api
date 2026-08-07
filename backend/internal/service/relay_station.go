@@ -116,6 +116,7 @@ type RelayStationView struct {
 	ControlURL  string           `json:"control_url"`
 	Enabled     bool             `json:"enabled"`
 	Credentials RelayCredentials `json:"credentials"`
+	Balance     *float64         `json:"balance,omitempty"`
 	CreatedAt   time.Time        `json:"created_at"`
 	UpdatedAt   time.Time        `json:"updated_at"`
 }
@@ -386,7 +387,7 @@ func (s *RelayStationService) ListStations(ctx context.Context) ([]RelayStationV
 
 	result := make([]RelayStationView, 0, len(stations))
 	for _, station := range stations {
-		result = append(result, station.view())
+		result = append(result, s.stationView(ctx, station))
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].CreatedAt.Before(result[j].CreatedAt) })
 	return result, nil
@@ -402,8 +403,19 @@ func (s *RelayStationService) GetStation(ctx context.Context, id string) (*Relay
 	if !ok {
 		return nil, ErrRelayStationNotFound
 	}
-	view := station.view()
+	view := s.stationView(ctx, station)
 	return &view, nil
+}
+
+func (s *RelayStationService) stationView(ctx context.Context, station relayStation) RelayStationView {
+	view := station.view()
+	if station.Type != RelayStationTypeAIHub || station.Username == "" || station.Password == "" {
+		return view
+	}
+	if balance, err := s.fetchAIHubBalance(ctx, station); err == nil {
+		view.Balance = balance
+	}
+	return view
 }
 
 func (s *RelayStationService) CreateStation(ctx context.Context, input RelayStationCreateInput) (*RelayStationView, error) {

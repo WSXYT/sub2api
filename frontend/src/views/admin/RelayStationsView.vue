@@ -193,6 +193,11 @@
             />
           </template>
 
+          <template #cell-balance="{ row }">
+            <span v-if="row.type === 'aihub'">{{ formatCurrency(row.balance) }}</span>
+            <span v-else>-</span>
+          </template>
+
           <template #cell-actions="{ row }">
             <div class="space-y-1.5">
               <div class="flex items-center gap-1">
@@ -723,6 +728,7 @@ const stationColumns = computed<Column[]>(() => [
   { key: 'name', label: t('admin.relayStations.columns.name'), sortable: true },
   { key: 'type', label: t('admin.relayStations.columns.type'), sortable: true },
   { key: 'address', label: t('admin.relayStations.columns.address') },
+  { key: 'balance', label: t('admin.relayStations.columns.balance') },
   { key: 'enabled', label: t('admin.relayStations.columns.status'), sortable: true },
   { key: 'actions', label: t('admin.relayStations.columns.actions') }
 ])

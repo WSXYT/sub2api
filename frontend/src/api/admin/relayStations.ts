@@ -23,6 +23,7 @@ export interface RelayStation {
 	control_url: string;
 	enabled: boolean;
 	credentials: RelayStationCredentials;
+	balance?: number | null;
 	created_at: string;
 	updated_at: string;
 }
