@@ -181,6 +181,10 @@ func (s *RelayStationService) fetchAIHubRates(ctx context.Context, station relay
 		candidate, found := candidates[sourceGroup]
 		if sourceGroup == "default" {
 			candidate, found = current, currentFound
+		} else if !found {
+			// Older aihub-auto instances expose only the active candidate set;
+			// keep named policy bindings routeable until group-prices is available.
+			candidate, found = current, currentFound
 		}
 		if !found || candidate.Rate == nil || candidate.Excluded {
 			result[sourceGroup] = RelayStationRate{Status: RelayRateStatusUnavailable}

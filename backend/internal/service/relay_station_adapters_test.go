@@ -80,6 +80,113 @@ func TestValidateStationAllowsPlatformKeyDiscovery(t *testing.T) {
 	}
 }
 
+func TestListGroupsUsesStationRateSources(t *testing.T) {
+	tests := []struct {
+		name        string
+		stationType RelayStationType
+		groupsBody  string
+		want        []string
+	}{
+		{
+			name:        "newapi pricing",
+			stationType: RelayStationTypeNewAPI,
+			groupsBody:  `{"success":true,"group_ratio":{"vip":0.8,"default":1}}`,
+			want:        []string{"default", "vip"},
+		},
+		{
+			name:        "sub2api available groups",
+			stationType: RelayStationTypeSub2API,
+			groupsBody:  `{"code":0,"data":[{"name":"vip","rate_multiplier":0.8},{"name":"default","rate_multiplier":1}]}`,
+			want:        []string{"default", "vip"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/user/login":
+					_, _ = w.Write([]byte(`{"success":true,"data":{"access_token":"dashboard"}}`))
+				case "/api/pricing", "/api/v1/groups/available":
+					_, _ = w.Write([]byte(test.groupsBody))
+				case "/api/v1/auth/login":
+					_, _ = w.Write([]byte(`{"code":0,"data":{"access_token":"dashboard"}}`))
+				default:
+					t.Errorf("unexpected endpoint: %s", r.URL.Path)
+				}
+			}))
+			defer upstream.Close()
+
+			service := &RelayStationService{
+				settingRepo: &fakeSettingRepo{},
+				loaded:      true,
+				config: relayStationConfig{Stations: []relayStation{{
+					ID: "station", Type: test.stationType, Name: "Station", BaseURL: upstream.URL,
+					ControlURL: upstream.URL, Username: "admin", Password: "password",
+				}}},
+				sessions: make(map[string]*relayStationSession),
+			}
+			groups, err := service.ListGroups(context.Background(), "station")
+			if err != nil {
+				t.Fatalf("ListGroups: %v", err)
+			}
+			if len(groups) != len(test.want) {
+				t.Fatalf("group count = %d, want %d", len(groups), len(test.want))
+			}
+			for index, want := range test.want {
+				if groups[index].Name != want {
+					t.Fatalf("group[%d] = %q, want %q", index, groups[index].Name, want)
+				}
+			}
+		})
+	}
+}
+
+func TestSyncAIHubConfigPostsBindingPolicy(t *testing.T) {
+	min, max := 0.1, 0.8
+	var received struct {
+		Groups map[string]relayAIHubGroupConfig `json:"groups"`
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/ctl/config" {
+			t.Errorf("unexpected endpoint: %s", r.URL.Path)
+			return
+		}
+		if r.Header.Get("x-ui-password") != "ui-password" {
+			t.Error("aihub config request did not authenticate")
+		}
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Errorf("decode config: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer upstream.Close()
+
+	service := &RelayStationService{
+		settingRepo: &fakeSettingRepo{},
+		loaded:      true,
+		config: relayStationConfig{
+			Stations: []relayStation{{
+				ID: "aihub", Type: RelayStationTypeAIHub, Name: "AIHub", BaseURL: upstream.URL,
+				ControlURL: upstream.URL, UIPassword: "ui-password", Enabled: true,
+			}},
+			Bindings: []RelayGroupBinding{{
+				GroupID: 1,
+				Sources: []RelayStationSource{{
+					StationID: "aihub", Enabled: true, SourceGroup: "local-group", Mode: "economy",
+					PriceBand: &RelayPriceBand{Min: &min, Max: &max},
+				}},
+			}},
+		},
+	}
+	if err := service.SyncAIHubConfig(context.Background()); err != nil {
+		t.Fatalf("SyncAIHubConfig: %v", err)
+	}
+	policy, ok := received.Groups["local-group"]
+	if !ok || policy.Mode != "economy" || policy.PriceBand == nil || policy.PriceBand.Min == nil || policy.PriceBand.Max == nil || *policy.PriceBand.Min != min || *policy.PriceBand.Max != max {
+		t.Fatalf("received policy = %#v, want economy %.1f-%.1f", policy, min, max)
+	}
+}
+
 func TestTestStationProbesUnboundAIHub(t *testing.T) {
 	requests := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

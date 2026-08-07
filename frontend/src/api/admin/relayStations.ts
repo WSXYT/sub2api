@@ -70,6 +70,10 @@ export interface RelayGroupBinding {
 	sources: RelayStationSource[];
 }
 
+export interface RelayStationGroup {
+	name: string;
+}
+
 export interface RelayRate {
 	station_id: string;
 	station_name: string;
@@ -206,6 +210,15 @@ export async function updateBindings(
 	return data;
 }
 
+export async function listGroups(
+	stationId: string,
+): Promise<{ groups: RelayStationGroup[] }> {
+	const { data } = await apiClient.get<{ groups: RelayStationGroup[] }>(
+		`/admin/relay-stations/${stationId}/groups`,
+	);
+	return data;
+}
+
 export async function listRates(
 	stationId?: string,
 ): Promise<{ rates: RelayRate[] }> {
@@ -255,6 +268,7 @@ export const relayStationsAPI = {
 	test: testStation,
 	listBindings,
 	updateBindings,
+	listGroups,
 	listRates,
 	refreshRates,
 	getProfit,

@@ -193,6 +193,11 @@ type RelayRateView struct {
 	UpdatedAt     time.Time `json:"updated_at"`
 }
 
+// RelayStationGroup is an upstream group that can be selected in a binding.
+type RelayStationGroup struct {
+	Name string `json:"name"`
+}
+
 // RelayProfitEstimate is a current-price estimate, not historical source attribution.
 type RelayProfitEstimate struct {
 	GroupID          int64    `json:"group_id"`
@@ -723,6 +728,53 @@ func (s *RelayStationService) ListRatesForStation(ctx context.Context, stationID
 	return s.listRates(stationID), nil
 }
 
+// ListGroups returns the currently available upstream groups for a station.
+// AIHub uses policy keys rather than a user-selectable upstream group.
+func (s *RelayStationService) ListGroups(ctx context.Context, stationID string) ([]RelayStationGroup, error) {
+	if err := s.ensureLoaded(ctx); err != nil {
+		return nil, err
+	}
+	station, found := findRelayStation(s.snapshotConfig().Stations, stationID)
+	if !found {
+		return nil, ErrRelayStationNotFound
+	}
+	if station.Type == RelayStationTypeAIHub {
+		return nil, infraerrors.BadRequest("RELAY_GROUP_LIST_UNSUPPORTED", "aihub stations select groups automatically")
+	}
+
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		session, err := s.relaySession(ctx, station)
+		if err != nil {
+			return nil, err
+		}
+		var groups map[string]float64
+		var status int
+		switch station.Type {
+		case RelayStationTypeNewAPI:
+			groups, status, err = s.requestNewAPIRates(ctx, station, session)
+		case RelayStationTypeSub2API:
+			groups, status, err = s.requestSub2APIRates(ctx, station, session.token)
+		default:
+			return nil, errors.New("unsupported relay station type")
+		}
+		if err == nil {
+			result := make([]RelayStationGroup, 0, len(groups))
+			for name := range groups {
+				result = append(result, RelayStationGroup{Name: name})
+			}
+			sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
+			return result, nil
+		}
+		lastErr = err
+		if status != http.StatusUnauthorized && status != http.StatusForbidden {
+			break
+		}
+		s.clearRelaySession(station.ID)
+	}
+	return nil, lastErr
+}
+
 func (s *RelayStationService) listRates(onlyStationID string) []RelayRateView {
 	s.mu.RLock()
 	configSnapshot := cloneRelayConfig(s.config)
@@ -1056,6 +1108,13 @@ func (s *RelayStationService) validateConfig(candidate *relayStationConfig) erro
 			}
 			if math.IsNaN(source.Delta) || math.IsInf(source.Delta, 0) {
 				return infraerrors.BadRequest("RELAY_DELTA_INVALID", "relay source delta must be finite")
+			}
+			if station, exists := stationIDs[source.StationID]; exists && station.Type == RelayStationTypeAIHub && source.Mode != "" {
+				switch source.Mode {
+				case "economy", "balanced", "speed":
+				default:
+					return infraerrors.BadRequest("RELAY_MODE_INVALID", "aihub relay mode must be economy, balanced, or speed")
+				}
 			}
 			if err := validateRelayPriceBand(source.PriceBand); err != nil {
 				return err

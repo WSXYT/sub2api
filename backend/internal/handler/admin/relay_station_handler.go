@@ -169,6 +169,16 @@ func (h *RelayStationHandler) UpdateBindings(c *gin.Context) {
 	})
 }
 
+// ListGroups handles GET /api/v1/admin/relay-stations/:id/groups.
+func (h *RelayStationHandler) ListGroups(c *gin.Context) {
+	groups, err := h.relayService.ListGroups(c.Request.Context(), strings.TrimSpace(c.Param("id")))
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"groups": groups})
+}
+
 // ListRates handles GET /api/v1/admin/relay-stations/rates.
 func (h *RelayStationHandler) ListRates(c *gin.Context) {
 	stationID := strings.TrimSpace(c.Query("station_id"))

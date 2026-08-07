@@ -292,16 +292,58 @@
               </div>
             </template>
 
-            <template #cell-source_group="{ row }">
-              <input
-                v-model="row.source_group"
-                type="text"
-                maxlength="100"
-                class="input min-w-40"
-                :aria-label="bindingControlLabel('sourceGroup', row)"
-                :placeholder="t('admin.relayStations.binding.sourceGroupPlaceholder')"
-                @input="bindingsDirty = true"
+            <template #cell-group="{ row }">
+              <div v-if="stationById(row.station_id)?.type === 'aihub'" class="text-sm text-gray-500 dark:text-dark-300">
+                {{ t('admin.relayStations.binding.autoSelect') }}
+              </div>
+              <Select
+                v-else
+                :model-value="row.source_group"
+                :options="groupOptionsFor(row)"
+                searchable
+                :disabled="groupOptionsFor(row).length === 0"
+                :placeholder="t('admin.relayStations.binding.selectStationGroup')"
+                :aria-label="bindingControlLabel('group', row)"
+                @update:model-value="updateSourceGroup(row, $event)"
               />
+            </template>
+
+            <template #cell-mode="{ row }">
+              <Select
+                v-if="stationById(row.station_id)?.type === 'aihub'"
+                :model-value="sourceMode(row)"
+                :options="modeOptions"
+                :aria-label="bindingControlLabel('mode', row)"
+                @update:model-value="updateSourceMode(row, $event)"
+              />
+              <span v-else class="text-gray-400">-</span>
+            </template>
+
+            <template #cell-price_band="{ row }">
+              <div v-if="stationById(row.station_id)?.type === 'aihub'" class="flex min-w-56 items-center gap-2">
+                <input
+                  :value="priceBandValue(row, 'min')"
+                  type="number"
+                  min="0"
+                  step="0.0001"
+                  class="input w-24"
+                  :aria-label="`${bindingControlLabel('priceBand', row)}: ${t('admin.relayStations.binding.minimum')}`"
+                  :placeholder="t('admin.relayStations.binding.minimum')"
+                  @input="updatePriceBand(row, 'min', $event)"
+                />
+                <span class="text-gray-400">~</span>
+                <input
+                  :value="priceBandValue(row, 'max')"
+                  type="number"
+                  min="0"
+                  step="0.0001"
+                  class="input w-24"
+                  :aria-label="`${bindingControlLabel('priceBand', row)}: ${t('admin.relayStations.binding.maximum')}`"
+                  :placeholder="t('admin.relayStations.binding.maximum')"
+                  @input="updatePriceBand(row, 'max', $event)"
+                />
+              </div>
+              <span v-else class="text-gray-400">-</span>
             </template>
 
             <template #cell-enabled="{ row }">
@@ -309,17 +351,6 @@
                 :model-value="row.enabled"
                 :aria-label="bindingControlLabel('enabled', row)"
                 @update:model-value="updateSourceEnabled(row, $event)"
-              />
-            </template>
-
-            <template #cell-delta="{ row }">
-              <input
-                v-model.number="row.delta"
-                type="number"
-                step="0.0001"
-                class="input w-28"
-                :aria-label="bindingControlLabel('delta', row)"
-                @input="bindingsDirty = true"
               />
             </template>
 
@@ -635,10 +666,12 @@ import {
   effectiveRelayRate,
   relayErrorReason,
   type RelayGroupBinding,
+  type RelayPriceBand,
   type RelayProfitEstimate,
   type RelayRate,
   type RelayRateStatus,
   type RelayStation,
+  type RelayStationGroup,
   type RelayStationCreateInput,
   type RelayStationCredentials,
   type RelayStationSource,
@@ -689,6 +722,7 @@ const stations = ref<RelayStation[]>([])
 const groups = ref<AdminGroup[]>([])
 const bindings = ref<RelayGroupBinding[]>([])
 const rates = ref<RelayRate[]>([])
+const stationGroups = ref<Record<string, RelayStationGroup[]>>({})
 const selectedGroupId = ref<number | null>(null)
 const stationToAdd = ref<string | null>(null)
 const bindingsDirty = ref(false)
@@ -733,11 +767,19 @@ const stationColumns = computed<Column[]>(() => [
   { key: 'actions', label: t('admin.relayStations.columns.actions') }
 ])
 
+const modeOptions = computed(() =>
+  (['economy', 'balanced', 'speed'] as const).map((mode) => ({
+    value: mode,
+    label: t(`admin.relayStations.binding.modes.${mode}`)
+  }))
+)
+
 const bindingColumns = computed<Column[]>(() => [
   { key: 'station', label: t('admin.relayStations.columns.station') },
-  { key: 'source_group', label: t('admin.relayStations.columns.sourceGroup') },
+  { key: 'group', label: t('admin.relayStations.columns.group') },
+  { key: 'mode', label: t('admin.relayStations.columns.mode') },
+  { key: 'price_band', label: t('admin.relayStations.columns.priceBand') },
   { key: 'enabled', label: t('admin.relayStations.columns.enabled') },
-  { key: 'delta', label: t('admin.relayStations.columns.delta') },
   { key: 'rate', label: t('admin.relayStations.columns.rate') },
   { key: 'effective_rate', label: t('admin.relayStations.columns.effectiveRate') },
   { key: 'updated_at', label: t('admin.relayStations.columns.updatedAt') },
@@ -862,7 +904,7 @@ function rateStatusLabel(status?: RelayRateStatus): string {
 }
 
 function bindingControlLabel(
-  key: 'sourceGroup' | 'enabled' | 'delta',
+  key: 'group' | 'mode' | 'priceBand' | 'enabled',
   source: RelayStationSource
 ): string {
   return `${t(`admin.relayStations.columns.${key}`)}: ${stationById(source.station_id)?.name || source.station_id}`
@@ -880,11 +922,11 @@ function stationById(id: string): RelayStation | undefined {
 }
 
 function sourceKey(source: RelayStationSource): string {
-  return `${source.station_id}\u0000${source.source_group.trim() || 'default'}`
+  return `${source.station_id}\u0000${source.source_group?.trim() || 'default'}`
 }
 
 function rateForSource(source: RelayStationSource): RelayRate | undefined {
-  const group = source.source_group.trim() || 'default'
+  const group = source.source_group?.trim() || 'default'
   return rates.value.find(
     (rate) => rate.station_id === source.station_id && rate.source_group === group
   )
@@ -942,6 +984,61 @@ function errorMessage(error: unknown, fallback: string): string {
   return fallback
 }
 
+function groupOptionsFor(source: RelayStationSource): Array<{ value: string; label: string }> {
+  return (stationGroups.value[source.station_id] || []).map((group) => ({
+    value: group.name,
+    label: group.name
+  }))
+}
+
+function sourceMode(source: RelayStationSource): string {
+  return source.mode === 'economy' || source.mode === 'speed' ? source.mode : 'balanced'
+}
+
+function priceBandValue(source: RelayStationSource, key: keyof RelayPriceBand): number | string {
+  const value = source.price_band?.[key]
+  return typeof value === 'number' && Number.isFinite(value) ? value : ''
+}
+
+function updateSourceGroup(source: RelayStationSource, value: string | number | boolean | null): void {
+  source.source_group = typeof value === 'string' ? value : ''
+  bindingsDirty.value = true
+}
+
+function updateSourceMode(source: RelayStationSource, value: string | number | boolean | null): void {
+  if (value === 'economy' || value === 'balanced' || value === 'speed') source.mode = value
+  bindingsDirty.value = true
+}
+
+function updatePriceBand(
+  source: RelayStationSource,
+  key: keyof RelayPriceBand,
+  event: Event
+): void {
+  const value = (event.target as HTMLInputElement).value.trim()
+  const band = source.price_band || {}
+  if (value === '') delete band[key]
+  else band[key] = Number(value)
+  source.price_band = Object.keys(band).length ? band : undefined
+  bindingsDirty.value = true
+}
+
+async function loadStationGroups(nextStations: RelayStation[]): Promise<void> {
+  const results = await Promise.all(
+    nextStations
+      .filter((station) => station.type !== 'aihub')
+      .map(async (station) => {
+        try {
+          const result = await adminAPI.relayStations.listGroups(station.id)
+          return [station.id, result.groups] as const
+        } catch {
+          return [station.id, []] as const
+        }
+      })
+  )
+  stationGroups.value = Object.fromEntries(results)
+}
+
 async function loadAll(): Promise<void> {
   loading.value = true
   try {
@@ -956,6 +1053,7 @@ async function loadAll(): Promise<void> {
     bindings.value = bindingResult.bindings
     rates.value = rateResult.rates
     bindingsDirty.value = false
+    if (activeTab.value === 'bindings') await loadStationGroups(nextStations)
 
     if (!groups.value.some((group) => group.id === selectedGroupId.value)) {
       const firstBoundGroup = bindings.value.find((binding) =>
@@ -1116,13 +1214,24 @@ function ensureSelectedBinding(): RelayGroupBinding | null {
 
 function addSource(): void {
   if (!stationToAdd.value) return
+  const station = stationById(stationToAdd.value)
   const binding = ensureSelectedBinding()
-  if (!binding || binding.sources.some((source) => source.station_id === stationToAdd.value)) return
+  if (!station || !binding || binding.sources.some((source) => source.station_id === stationToAdd.value)) return
+  const selectedGroup = groups.value.find((group) => group.id === selectedGroupId.value)
+  const availableGroups = stationGroups.value[station.id] || []
+  const sourceGroup = station.type === 'aihub'
+    ? selectedGroup?.name.trim() || 'default'
+    : availableGroups[0]?.name || ''
+  if (station.type !== 'aihub' && !sourceGroup) {
+    appStore.showError(t('admin.relayStations.binding.noStationGroups'))
+    return
+  }
   binding.sources.push({
-    station_id: stationToAdd.value,
+    station_id: station.id,
     enabled: true,
-    source_group: 'default',
-    delta: 0
+    source_group: sourceGroup,
+    delta: 0,
+    ...(station.type === 'aihub' ? { mode: 'balanced', price_band: {} } : {})
   })
   stationToAdd.value = null
   bindingsDirty.value = true
@@ -1151,24 +1260,48 @@ function normalizedBindings(): RelayGroupBinding[] | null {
   const normalized = bindings.value
     .map((binding) => ({
       group_id: binding.group_id,
-      sources: binding.sources.map((source) => ({
-        ...source,
-        station_id: source.station_id.trim(),
-        source_group: source.source_group.trim() || 'default',
-        delta: Number(source.delta)
-      }))
+      sources: binding.sources.map((source) => {
+        const station = stationById(source.station_id)
+        const priceBand = station?.type === 'aihub' && source.price_band
+          ? {
+              min: source.price_band.min === undefined ? undefined : Number(source.price_band.min),
+              max: source.price_band.max === undefined ? undefined : Number(source.price_band.max)
+            }
+          : undefined
+        return {
+          ...source,
+          station_id: source.station_id.trim(),
+          source_group: source.source_group?.trim() || 'default',
+          delta: Number(source.delta ?? 0),
+          mode: station?.type === 'aihub' ? sourceMode(source) : undefined,
+          price_band: priceBand && (priceBand.min !== undefined || priceBand.max !== undefined)
+            ? priceBand
+            : undefined
+        }
+      })
     }))
     .filter((binding) => binding.sources.length > 0)
 
   for (const binding of normalized) {
     for (const source of binding.sources) {
       if (!source.source_group || source.source_group.length > 100 || hasControlCharacter(source.source_group)) {
-        appStore.showError(t('admin.relayStations.binding.sourceGroupInvalid'))
+        appStore.showError(t('admin.relayStations.binding.groupInvalid'))
         return null
       }
       if (!Number.isFinite(source.delta)) {
-        appStore.showError(t('admin.relayStations.binding.deltaInvalid'))
+        appStore.showError(t('admin.relayStations.binding.rateAdjustmentInvalid'))
         return null
+      }
+      if (source.price_band) {
+        const { min, max } = source.price_band
+        if (
+          (min !== undefined && (!Number.isFinite(min) || min < 0)) ||
+          (max !== undefined && (!Number.isFinite(max) || max < 0)) ||
+          (min !== undefined && max !== undefined && max < min)
+        ) {
+          appStore.showError(t('admin.relayStations.binding.priceBandInvalid'))
+          return null
+        }
       }
     }
   }
@@ -1237,6 +1370,7 @@ watch(selectedGroupId, () => {
 })
 
 watch(activeTab, (tab) => {
+  if (tab === 'bindings') void loadStationGroups(stations.value)
   if (tab === 'profit' && !profitLoaded.value) void loadProfit()
 })
 

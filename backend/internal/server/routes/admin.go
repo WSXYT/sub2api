@@ -357,6 +357,7 @@ func registerRelayStationRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		relay.POST("/rates/refresh", h.Admin.RelayStation.RefreshRates)
 		relay.POST("/sync", h.Admin.RelayStation.SyncAIHub)
 		relay.GET("/profit", h.Admin.RelayStation.Profit)
+		relay.GET("/:id/groups", h.Admin.RelayStation.ListGroups)
 		relay.GET("/:id", h.Admin.RelayStation.Get)
 		relay.PUT("/:id", h.Admin.RelayStation.Update)
 		relay.DELETE("/:id", h.Admin.RelayStation.Delete)
