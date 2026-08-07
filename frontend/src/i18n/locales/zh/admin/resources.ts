@@ -657,7 +657,11 @@ export default {
         uiPassword: '控制台密码',
         proxyToken: 'API Token',
         username: '账号',
+        usernamePlaceholder: '输入平台账号',
         password: '账号密码',
+        passwordPlaceholder: '输入平台密码',
+        aihubEmail: 'AIHub 邮箱',
+        aihubEmailPlaceholder: '输入 AIHub 平台登录邮箱',
         enabled: '启用中转站',
         leaveBlank: '留空保持现有设置'
       },

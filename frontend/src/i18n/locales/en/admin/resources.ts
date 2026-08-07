@@ -660,7 +660,11 @@ export default {
         uiPassword: 'Console Password',
         proxyToken: 'API Token',
         username: 'Account',
+        usernamePlaceholder: 'Enter platform account',
         password: 'Account Password',
+        passwordPlaceholder: 'Enter platform password',
+        aihubEmail: 'AIHub Email',
+        aihubEmailPlaceholder: 'Enter AIHub platform login email',
         enabled: 'Enable Relay Station',
         leaveBlank: 'Leave blank to keep the current setting'
       },
