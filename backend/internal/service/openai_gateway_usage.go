@@ -126,16 +126,30 @@ func openAIUsagePricingAt(input *OpenAIRecordUsageInput) time.Time {
 	return timezone.Now()
 }
 
+// RecordRelayUsage records relay traffic without creating a synthetic local account.
+// Relay requests retain normal user, API-key, subscription, and group billing.
+func (s *OpenAIGatewayService) RecordRelayUsage(ctx context.Context, input *OpenAIRecordUsageInput) error {
+	if input == nil {
+		return errors.New("relay usage input is nil")
+	}
+	relayInput := *input
+	relayInput.Account = &Account{}
+	return s.RecordUsage(ctx, &relayInput)
+}
+
 // RecordUsage records usage and deducts balance
 func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRecordUsageInput) error {
 	if input == nil {
 		return errors.New("openai usage input is nil")
 	}
-	result := input.Result
-	if result == nil {
+	if input.Result == nil {
 		return errors.New("openai usage result is nil")
 	}
-	if s.rateLimitService != nil && input.Account != nil && input.Account.Platform == PlatformOpenAI {
+	if input.APIKey == nil || input.User == nil || input.Account == nil {
+		return errors.New("openai usage requires api key, user, and account")
+	}
+	result := input.Result
+	if s.rateLimitService != nil && input.Account.Platform == PlatformOpenAI {
 		s.rateLimitService.ResetOpenAI403Counter(ctx, input.Account.ID)
 	}
 
@@ -419,7 +433,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	}
 
 	// 计算账号统计定价费用（使用最终上游模型匹配自定义规则）
-	if apiKey.GroupID != nil {
+	if apiKey.GroupID != nil && account.ID > 0 {
 		applyAccountStatsCost(ctx, usageLog, s.channelService, s.billingService,
 			account.ID, *apiKey.GroupID, result.UpstreamModel, result.Model,
 			tokens, cost.TotalCost,
@@ -429,7 +443,9 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
 		writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.openai_gateway")
 		logger.LegacyPrintf("service.openai_gateway", "[SIMPLE MODE] Usage recorded (not billed): user=%d, tokens=%d", usageLog.UserID, usageLog.TotalTokens())
-		s.deferredService.ScheduleLastUsedUpdate(account.ID)
+		if account.ID > 0 && s.deferredService != nil {
+			s.deferredService.ScheduleLastUsedUpdate(account.ID)
+		}
 		return nil
 	}
 

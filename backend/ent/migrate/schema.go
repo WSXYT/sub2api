@@ -1667,7 +1667,7 @@ var (
 		{Name: "cache_ttl_overridden", Type: field.TypeBool, Default: false},
 		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
 		{Name: "api_key_id", Type: field.TypeInt64},
-		{Name: "account_id", Type: field.TypeInt64},
+		{Name: "account_id", Type: field.TypeInt64, Nullable: true},
 		{Name: "group_id", Type: field.TypeInt64, Nullable: true},
 		{Name: "user_id", Type: field.TypeInt64},
 		{Name: "subscription_id", Type: field.TypeInt64, Nullable: true},

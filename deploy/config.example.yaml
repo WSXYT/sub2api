@@ -101,6 +101,16 @@ webauthn:
 run_mode: "standard"
 
 # =============================================================================
+# Relay Sidecar Configuration
+# 中转 Sidecar 配置
+# =============================================================================
+# Configure each relay account in Admin > Relay Stations. Every AIHub account
+# must use a separate original aihub-auto router instance; do not share one
+# router URL between accounts.
+# 在“管理员 > 中转站管理”中配置每个中继账号。每个 AIHub 账号必须使用独立的原版
+# aihub-auto 路由器实例，不能让多个账号共用同一个路由地址。
+
+# =============================================================================
 # CORS Configuration
 # 跨域资源共享 (CORS) 配置
 # =============================================================================

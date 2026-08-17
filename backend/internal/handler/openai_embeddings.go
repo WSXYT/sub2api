@@ -121,6 +121,25 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 	embPricingCtx, pricingAt := h.gatewayService.WithOpenAIRequestPricingContext(c.Request.Context(), apiKey.GroupID)
 	c.Request = c.Request.WithContext(embPricingCtx)
 
+	relayBody := body
+	relayUpstreamModel := reqModel
+	if channelMapping.Mapped {
+		relayBody = h.gatewayService.ReplaceModelInBody(body, channelMapping.MappedModel)
+		relayUpstreamModel = channelMapping.MappedModel
+	}
+	if h.tryRelayOpenAIForward(c, relayOpenAIForwardInput{
+		APIKey:             apiKey,
+		Subscription:       subscription,
+		Body:               relayBody,
+		OriginalModel:      reqModel,
+		UpstreamModel:      relayUpstreamModel,
+		SessionHash:        h.gatewayService.GenerateExplicitSessionHash(c, body),
+		PricingAt:          pricingAt,
+		ChannelUsageFields: clientRequestedUsageFields(c, channelMapping, reqModel, relayUpstreamModel),
+	}, &streamStarted) {
+		return
+	}
+
 	for {
 		selection, _, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
 			c.Request.Context(),

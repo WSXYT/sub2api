@@ -43,6 +43,9 @@ func RegisterAdminRoutes(
 		// 账号管理
 		registerAccountRoutes(admin, h, stepUpAuth)
 
+		// 中转站管理
+		registerRelayStationRoutes(admin, h)
+
 		// 公告管理
 		registerAnnouncementRoutes(admin, h)
 
@@ -345,6 +348,27 @@ func registerGroupRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		groups.PUT("/:id/rpm-overrides", h.Admin.Group.BatchSetGroupRPMOverrides)
 		groups.DELETE("/:id/rpm-overrides", h.Admin.Group.ClearGroupRPMOverrides)
 		groups.GET("/:id/api-keys", h.Admin.Group.GetGroupAPIKeys)
+	}
+}
+
+func registerRelayStationRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	relay := admin.Group("/relay-stations")
+	{
+		relay.GET("", h.Admin.RelayStation.List)
+		relay.POST("", h.Admin.RelayStation.Create)
+		relay.GET("/accounts", h.Admin.RelayStation.ListAccounts)
+		relay.PATCH("/accounts/:station_id", h.Admin.RelayStation.UpdateAccount)
+		relay.GET("/bindings", h.Admin.RelayStation.ListBindings)
+		relay.PUT("/bindings", h.Admin.RelayStation.UpdateBindings)
+		relay.GET("/rates", h.Admin.RelayStation.ListRates)
+		relay.POST("/rates/refresh", h.Admin.RelayStation.RefreshRates)
+		relay.POST("/sync", h.Admin.RelayStation.SyncAIHub)
+		relay.GET("/profit", h.Admin.RelayStation.Profit)
+		relay.GET("/:id/groups", h.Admin.RelayStation.ListGroups)
+		relay.GET("/:id", h.Admin.RelayStation.Get)
+		relay.PUT("/:id", h.Admin.RelayStation.Update)
+		relay.DELETE("/:id", h.Admin.RelayStation.Delete)
+		relay.POST("/:id/test", h.Admin.RelayStation.Test)
 	}
 }
 

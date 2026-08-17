@@ -34,7 +34,9 @@ func (UsageLog) Fields() []ent.Field {
 		// 关联字段
 		field.Int64("user_id"),
 		field.Int64("api_key_id"),
-		field.Int64("account_id"),
+		// Relay station forwarding has no local Account; its usage still belongs to
+		// the authenticated user, API key, and group.
+		field.Int64("account_id").Optional().Nillable(),
 		field.String("request_id").
 			MaxLen(64).
 			NotEmpty(),
@@ -205,7 +207,6 @@ func (UsageLog) Edges() []ent.Edge {
 		edge.From("account", Account.Type).
 			Ref("usage_logs").
 			Field("account_id").
-			Required().
 			Unique(),
 		edge.From("group", Group.Type).
 			Ref("usage_logs").

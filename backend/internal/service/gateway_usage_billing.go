@@ -126,7 +126,8 @@ func (p *postUsageBillingParams) shouldUpdateRateLimits() bool {
 }
 
 func (p *postUsageBillingParams) shouldUpdateAccountQuota() bool {
-	return p.Cost.TotalCost > 0 && p.Account.IsAPIKeyOrBedrock() && p.Account.HasAnyQuotaLimit()
+	return p != nil && p.Cost != nil && p.Account != nil && p.Account.ID > 0 &&
+		p.Cost.TotalCost > 0 && p.Account.IsAPIKeyOrBedrock() && p.Account.HasAnyQuotaLimit()
 }
 
 // postUsageBilling is the legacy fallback billing path used when the unified
@@ -351,7 +352,9 @@ func applyUsageBilling(ctx context.Context, requestID string, usageLog *UsageLog
 	}
 
 	if result == nil || !result.Applied {
-		deps.deferredService.ScheduleLastUsedUpdate(p.Account.ID)
+		if p.Account != nil && p.Account.ID > 0 && deps.deferredService != nil {
+			deps.deferredService.ScheduleLastUsedUpdate(p.Account.ID)
+		}
 		return false, nil
 	}
 
@@ -382,7 +385,9 @@ func finalizePostUsageBilling(ctx context.Context, p *postUsageBillingParams, de
 		deps.billingCacheService.QueueUpdateAPIKeyRateLimitUsage(p.APIKey.ID, p.Cost.ActualCost)
 	}
 
-	deps.deferredService.ScheduleLastUsedUpdate(p.Account.ID)
+	if p.Account != nil && p.Account.ID > 0 && deps.deferredService != nil {
+		deps.deferredService.ScheduleLastUsedUpdate(p.Account.ID)
+	}
 
 	// Platform quota 累加：仅在 standard（余额）模式生效；订阅模式豁免；仅对有 limit 的用户写
 	// Redis 同步写 + DB 异步持久化（flag=false 降级）或 flusher 异步刷（flag=true）:

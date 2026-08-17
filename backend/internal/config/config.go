@@ -1960,6 +1960,13 @@ func setDefaults() {
 	viper.SetDefault("cors.allowed_origins", []string{})
 	viper.SetDefault("cors.allow_credentials", true)
 
+	// Relay sidecars. Empty values let an existing legacy AIHub station provide
+	// the shared connection settings; otherwise the service falls back to localhost.
+	viper.SetDefault("relay.aihub.base_url", "")
+	viper.SetDefault("relay.aihub.control_url", "")
+	viper.SetDefault("relay.aihub.ui_password", "")
+	viper.SetDefault("relay.aihub.proxy_token", "")
+
 	// WebAuthn / Passkeys are opt-in because every deployment must explicitly
 	// declare its relying-party domain and trusted browser origins.
 	viper.SetDefault("webauthn.enabled", false)

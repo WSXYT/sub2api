@@ -175,6 +175,7 @@
         </div>
       </template>
       <template #table>
+        <RelayAccountsSection />
         <AccountBulkActionsBar
           :selected-ids="selIds"
           :total-results="pagination.total"
@@ -513,6 +514,7 @@ import ReAuthAccountModal from '@/components/admin/account/ReAuthAccountModal.vu
 import AccountTestModal from '@/components/admin/account/AccountTestModal.vue'
 import AccountStatsModal from '@/components/admin/account/AccountStatsModal.vue'
 import ScheduledTestsPanel from '@/components/admin/account/ScheduledTestsPanel.vue'
+import RelayAccountsSection from '@/components/admin/account/RelayAccountsSection.vue'
 import type { SelectOption } from '@/components/common/Select.vue'
 import AccountStatusIndicator from '@/components/account/AccountStatusIndicator.vue'
 import AccountUsageCell from '@/components/account/AccountUsageCell.vue'

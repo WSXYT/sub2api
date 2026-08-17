@@ -35,6 +35,7 @@ import affiliatesAPI from './affiliates'
 import riskControlAPI from './riskControl'
 import adminComplianceAPI from './compliance'
 import auditAPI from './audit'
+import relayStationsAPI from './relayStations'
 
 /**
  * Unified admin API object for convenient access
@@ -71,7 +72,8 @@ export const adminAPI = {
   affiliates: affiliatesAPI,
   riskControl: riskControlAPI,
   compliance: adminComplianceAPI,
-  audit: auditAPI
+  audit: auditAPI,
+  relayStations: relayStationsAPI
 }
 
 export {
@@ -106,7 +108,8 @@ export {
   affiliatesAPI,
   riskControlAPI,
   adminComplianceAPI,
-  auditAPI
+  auditAPI,
+  relayStationsAPI
 }
 
 export default adminAPI

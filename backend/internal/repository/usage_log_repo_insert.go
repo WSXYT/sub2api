@@ -1235,6 +1235,10 @@ func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 	log.SyncRequestTypeAndLegacyFields()
 	requestType := int16(log.RequestType)
 
+	var accountID any
+	if log.AccountID > 0 {
+		accountID = log.AccountID
+	}
 	groupID := nullInt64(log.GroupID)
 	subscriptionID := nullInt64(log.SubscriptionID)
 	duration := nullInt(log.DurationMs)
@@ -1278,7 +1282,7 @@ func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 		args: []any{
 			log.UserID,
 			log.APIKeyID,
-			log.AccountID,
+			accountID,
 			requestIDArg,
 			log.Model,
 			nullString(&requestedModel),
