@@ -924,10 +924,21 @@ func (s *RelayStationService) requestSub2APIProxyToken(ctx context.Context, stat
 	return "", errors.New("sub2api has no active API key for the source group")
 }
 
-// Forward constructs an OpenAI-compatible upstream request with only
+// Forward keeps the legacy adapter entry point for station-level tests.
+func (s *RelayStationService) Forward(ctx context.Context, route *RelayRoute, inbound *http.Request) (*http.Response, error) {
+	return s.forward(ctx, nil, route, inbound)
+}
+
+// ForwardAccount applies native account header overrides before forwarding the
+// selected relay account through its station adapter.
+func (s *RelayStationService) ForwardAccount(ctx context.Context, account *Account, route *RelayRoute, inbound *http.Request) (*http.Response, error) {
+	return s.forward(ctx, account, route, inbound)
+}
+
+// forward constructs an OpenAI-compatible upstream request with only
 // server-side station credentials. It intentionally never forwards the buyer's
 // Authorization or cookie headers to an upstream relay.
-func (s *RelayStationService) Forward(ctx context.Context, route *RelayRoute, inbound *http.Request) (*http.Response, error) {
+func (s *RelayStationService) forward(ctx context.Context, account *Account, route *RelayRoute, inbound *http.Request) (*http.Response, error) {
 	if route == nil || inbound == nil || inbound.URL == nil {
 		return nil, errors.New("relay request is invalid")
 	}
@@ -948,6 +959,9 @@ func (s *RelayStationService) Forward(ctx context.Context, route *RelayRoute, in
 	}
 	outbound.ContentLength = inbound.ContentLength
 	copyRelayHeaders(outbound.Header, inbound.Header)
+	if account != nil {
+		account.ApplyHeaderOverrides(outbound.Header)
+	}
 
 	if station.Type == RelayStationTypeAIHub {
 		activated, err := s.activateAIHubStation(ctx, station)

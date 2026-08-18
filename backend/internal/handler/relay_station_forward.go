@@ -28,23 +28,50 @@ type relayOpenAIForwardInput struct {
 	Stream             bool
 	SessionHash        string
 	PricingAt          time.Time
-	ChannelUsageFields service.ChannelUsageFields
+	ChannelUsageFields  service.ChannelUsageFields
+	RequiredCapability  service.OpenAIEndpointCapability
+	RequiredTransport   service.OpenAIUpstreamTransport
+	RequestPlatform     string
+	RequireCompact      bool
+	UseUpstreamTokenCost bool
 }
 
-// tryRelayOpenAIForward uses a configured relay only after the caller has
-// authenticated, audited, acquired a user slot, and rechecked billing.
+// tryRelayOpenAIForward lets the native scheduler choose a relay Account. A
+// native account selection is left to the caller's normal loop; relay traffic
+// only short-circuits after a relay identity wins the same candidate pool.
 func (h *OpenAIGatewayHandler) tryRelayOpenAIForward(c *gin.Context, input relayOpenAIForwardInput, streamStarted *bool) bool {
 	if h.relayService == nil || input.APIKey == nil || input.APIKey.GroupID == nil {
 		return false
 	}
 
-	route, err := h.relayService.ResolveRoute(c.Request.Context(), *input.APIKey.GroupID, input.SessionHash)
+	selection, _, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
+		c.Request.Context(), input.APIKey.GroupID, "", input.SessionHash,
+		input.OriginalModel, nil, input.RequiredTransport, input.RequiredCapability,
+		input.RequireCompact, false, input.UseUpstreamTokenCost, input.RequestPlatform,
+	)
+	if err != nil || selection == nil || selection.Account == nil || !selection.Account.IsRelay() {
+		return false
+	}
+	account := selection.Account
+	route, err := h.relayService.ResolveRouteForAccount(c.Request.Context(), account, *input.APIKey.GroupID)
 	if errors.Is(err, service.ErrRelayRouteNotFound) {
 		return false
 	}
 	if err != nil {
 		h.handleStreamingAwareError(c, http.StatusBadGateway, "api_error", "No relay source is currently available", valueOrFalse(streamStarted))
 		return true
+	}
+	if mappedModel := account.GetMappedModel(input.OriginalModel); mappedModel != input.OriginalModel {
+		input.Body = h.gatewayService.ReplaceModelInBody(input.Body, mappedModel)
+		input.UpstreamModel = mappedModel
+	}
+	relayLogger := requestLogger(c, "handler.openai_gateway.relay")
+	release, slotStatus := h.acquireResponsesAccountSlot(c, input.APIKey.GroupID, input.SessionHash, selection, input.Stream, streamStarted, relayLogger)
+	if slotStatus != openAISlotAcquireOK {
+		return true
+	}
+	if release != nil {
+		defer release()
 	}
 
 	inbound := c.Request.Clone(c.Request.Context())
@@ -55,7 +82,7 @@ func (h *OpenAIGatewayHandler) tryRelayOpenAIForward(c *gin.Context, input relay
 	}
 
 	startedAt := time.Now()
-	response, err := h.relayService.Forward(c.Request.Context(), route, inbound)
+	response, err := h.relayService.ForwardAccount(c.Request.Context(), account, route, inbound)
 	if err != nil {
 		h.handleStreamingAwareError(c, http.StatusBadGateway, "api_error", "Relay request failed", valueOrFalse(streamStarted))
 		return true
@@ -83,10 +110,11 @@ func (h *OpenAIGatewayHandler) tryRelayOpenAIForward(c *gin.Context, input relay
 	sessionID := service.ExtractClientSessionID(c)
 	requestPayloadHash := service.HashUsageRequestPayload(input.Body)
 	h.submitOpenAIUsageRecordTask(c.Request.Context(), result, func(ctx context.Context) {
-		if err := h.gatewayService.RecordRelayUsage(ctx, &service.OpenAIRecordUsageInput{
+		if err := h.gatewayService.RecordUsage(ctx, &service.OpenAIRecordUsageInput{
 			Result:             result,
 			APIKey:             input.APIKey,
 			User:               input.APIKey.User,
+			Account:            account,
 			Subscription:       input.Subscription,
 			InboundEndpoint:    inboundEndpoint,
 			UpstreamEndpoint:   upstreamEndpoint,

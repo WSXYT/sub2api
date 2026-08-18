@@ -134,8 +134,12 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 		OriginalModel:      reqModel,
 		UpstreamModel:      relayUpstreamModel,
 		SessionHash:        h.gatewayService.GenerateExplicitSessionHash(c, body),
-		PricingAt:          pricingAt,
-		ChannelUsageFields: clientRequestedUsageFields(c, channelMapping, reqModel, relayUpstreamModel),
+		PricingAt:           pricingAt,
+		ChannelUsageFields:  clientRequestedUsageFields(c, channelMapping, reqModel, relayUpstreamModel),
+		RequiredCapability:  service.OpenAIEndpointCapabilityEmbeddings,
+		RequiredTransport:   service.OpenAIUpstreamTransportHTTPSSE,
+		RequestPlatform:     service.PlatformOpenAI,
+		UseUpstreamTokenCost: true,
 	}, &streamStarted) {
 		return
 	}

@@ -501,8 +501,13 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			UpstreamModel:      relayUpstreamModel,
 			Stream:             reqStream,
 			SessionHash:        sessionHash,
-			PricingAt:          pricingAt,
-			ChannelUsageFields: clientRequestedUsageFields(c, channelMapping, reqModel, relayUpstreamModel),
+			PricingAt:           pricingAt,
+			ChannelUsageFields:  clientRequestedUsageFields(c, channelMapping, reqModel, relayUpstreamModel),
+			RequiredCapability:  requiredCapability,
+			RequiredTransport:   service.OpenAIUpstreamTransportAny,
+			RequestPlatform:     requestPlatform,
+			RequireCompact:      requireCompact,
+			UseUpstreamTokenCost: !imageIntent,
 		}, &streamStarted) {
 			return
 		}

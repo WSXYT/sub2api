@@ -37,6 +37,8 @@ var (
 type RelayStationType string
 
 const (
+	managedAIHubRouterURL = "http://127.0.0.1:8787"
+
 	RelayStationTypeAIHub   RelayStationType = "aihub"
 	RelayStationTypeNewAPI  RelayStationType = "newapi"
 	RelayStationTypeSub2API RelayStationType = "sub2api"
@@ -279,6 +281,7 @@ func (r *RelayRoute) EffectiveRate() float64 {
 type RelayStationService struct {
 	settingRepo SettingRepository
 	groupRepo   GroupRepository
+	accountRepo AccountRepository
 	usage       *UsageService
 	cfg         *config.Config
 
@@ -302,10 +305,11 @@ type RelayStationService struct {
 	stopSignal chan struct{}
 }
 
-func NewRelayStationService(settingRepo SettingRepository, groupRepo GroupRepository, usage *UsageService, cfg *config.Config) *RelayStationService {
+func NewRelayStationService(settingRepo SettingRepository, groupRepo GroupRepository, accountRepo AccountRepository, usage *UsageService, cfg *config.Config) *RelayStationService {
 	return &RelayStationService{
 		settingRepo: settingRepo,
 		groupRepo:   groupRepo,
+		accountRepo: accountRepo,
 		usage:       usage,
 		cfg:         cfg,
 		routes:             make(map[string]relayRouteCacheEntry),
@@ -313,6 +317,106 @@ func NewRelayStationService(settingRepo SettingRepository, groupRepo GroupReposi
 		activeAIHubStations: make(map[string]struct{}),
 		stopSignal:         make(chan struct{}),
 	}
+}
+
+const (
+	relayAccountMarkerKey = "relay_account"
+	relayAccountKeyKey    = "relay_account_key"
+	relayStationIDKey     = "relay_station_id"
+	relayGroupIDKey       = "relay_group_id"
+	relaySourceGroupKey   = "relay_source_group"
+)
+
+// SyncNativeRelayAccounts creates the native Account identities represented by
+// relay bindings. The station settings remain the transport source of truth;
+// account extra metadata gives native scheduling and admin APIs a stable key.
+func (s *RelayStationService) SyncNativeRelayAccounts(ctx context.Context) error {
+	if s == nil || s.accountRepo == nil {
+		return nil
+	}
+	if err := s.ensureLoaded(ctx); err != nil {
+		return err
+	}
+	s.mu.RLock()
+	stations := append([]relayStation(nil), s.config.Stations...)
+	bindings := cloneRelayBindings(s.config.Bindings)
+	s.mu.RUnlock()
+	byID := make(map[string]relayStation, len(stations))
+	for _, station := range stations {
+		byID[station.ID] = station
+	}
+	existing, err := s.accountRepo.FindByExtraField(ctx, relayAccountMarkerKey, true)
+	if err != nil {
+		return err
+	}
+	existingByKey := make(map[string][]Account, len(existing))
+	desired := make(map[string]bool)
+	for _, binding := range bindings {
+		for _, source := range binding.Sources {
+			station, ok := byID[source.StationID]
+			if !ok {
+				continue
+			}
+			key := relayAccountKey(station.ID, binding.GroupID, source.SourceGroup)
+			desired[key] = source.Enabled && station.Enabled
+		}
+	}
+	for _, account := range existing {
+		key := account.GetExtraString(relayAccountKeyKey)
+		existingByKey[key] = append(existingByKey[key], account)
+	}
+	for _, binding := range bindings {
+		for _, source := range binding.Sources {
+			station, ok := byID[source.StationID]
+			if !ok {
+				continue
+			}
+			key := relayAccountKey(station.ID, binding.GroupID, source.SourceGroup)
+			for _, account := range existingByKey[key] {
+				if !source.Enabled || !station.Enabled {
+					if err := s.accountRepo.SetSchedulable(ctx, account.ID, false); err != nil {
+						return err
+					}
+				}
+			}
+			if len(existingByKey[key]) > 0 {
+				continue
+			}
+			account := &Account{
+				Name:          fmt.Sprintf("%s / %s", station.Name, source.SourceGroup),
+				Platform:      PlatformOpenAI,
+				Type:          "relay",
+				Credentials:   map[string]any{},
+				Extra:         map[string]any{relayAccountMarkerKey: true, relayAccountKeyKey: key, relayStationIDKey: station.ID, relayGroupIDKey: binding.GroupID, relaySourceGroupKey: source.SourceGroup},
+				Concurrency:   3,
+				Priority:      -source.Priority,
+				Status:        StatusActive,
+				Schedulable:   source.Enabled && station.Enabled,
+				RateMultiplier: func() *float64 { value := 1.0; return &value }(),
+			}
+			if err := s.accountRepo.Create(ctx, account); err != nil {
+				return err
+			}
+			if err := s.accountRepo.BindGroups(ctx, account.ID, []int64{binding.GroupID}); err != nil {
+				return err
+			}
+		}
+	}
+	for key, accounts := range existingByKey {
+		if desired[key] {
+			continue
+		}
+		for _, account := range accounts {
+			if err := s.accountRepo.SetSchedulable(ctx, account.ID, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func relayAccountKey(stationID string, groupID int64, sourceGroup string) string {
+	return fmt.Sprintf("%s:%d:%s", stationID, groupID, sourceGroup)
 }
 
 // Start begins best-effort periodic rate polling and aihub configuration sync.
@@ -475,9 +579,12 @@ func (s *RelayStationService) CreateStation(ctx context.Context, input RelayStat
 			return nil, infraerrors.BadRequest("RELAY_AIHUB_ACCOUNT_REQUIRED", "aihub station requires email and password")
 		}
 		if station.BaseURL == "" {
-			return nil, infraerrors.BadRequest("RELAY_AIHUB_ROUTER_REQUIRED", "aihub station requires its own aihub-auto router url")
+			station.BaseURL = managedAIHubRouterURL
 		}
 	} else if station.Type == RelayStationTypeNewAPI || station.Type == RelayStationTypeSub2API {
+		if station.ControlURL == "" {
+			station.ControlURL = station.BaseURL
+		}
 		if station.BaseURL == "" || station.ControlURL == "" {
 			return nil, infraerrors.BadRequest("RELAY_ENDPOINTS_REQUIRED", "newapi and sub2api stations require base_url and control_url")
 		}
@@ -503,6 +610,9 @@ func (s *RelayStationService) CreateStation(ctx context.Context, input RelayStat
 	s.config = candidate
 	s.clearRoutesLocked()
 	s.mu.Unlock()
+	if err := s.SyncNativeRelayAccounts(ctx); err != nil {
+		return nil, err
+	}
 
 	view := station.view()
 	return &view, nil
@@ -565,6 +675,9 @@ func (s *RelayStationService) UpdateStation(ctx context.Context, id string, inpu
 	s.mu.Unlock()
 	if stationType == RelayStationTypeAIHub {
 		s.clearActiveAIHubStation(id)
+	}
+	if err := s.SyncNativeRelayAccounts(ctx); err != nil {
+		return nil, err
 	}
 	return &view, nil
 }
@@ -750,6 +863,9 @@ func (s *RelayStationService) UpdateBindings(ctx context.Context, bindings []Rel
 	result := cloneRelayBindings(candidate.Bindings)
 	s.mu.Unlock()
 	s.clearActiveAIHubStation("")
+	if err := s.SyncNativeRelayAccounts(ctx); err != nil {
+		return nil, err
+	}
 	return result, nil
 }
 
@@ -843,7 +959,42 @@ func (s *RelayStationService) refreshRates(ctx context.Context, onlyStationID st
 	if persistErr != nil {
 		return persistErr
 	}
+	if err := s.syncNativeRelayRates(ctx, snapshot, candidateRates); err != nil {
+		return err
+	}
 	return errors.Join(pollErrors...)
+}
+
+func (s *RelayStationService) syncNativeRelayRates(ctx context.Context, snapshot relayStationConfig, rates relayRateCache) error {
+	if s == nil || s.accountRepo == nil {
+		return nil
+	}
+	for _, binding := range snapshot.Bindings {
+		for _, source := range binding.Sources {
+			key := relayAccountKey(source.StationID, binding.GroupID, source.SourceGroup)
+			accounts, err := s.accountRepo.FindByExtraField(ctx, relayAccountKeyKey, key)
+			if err != nil {
+				return err
+			}
+			if len(accounts) == 0 {
+				continue
+			}
+			rate := rates.Rates[source.StationID][source.SourceGroup]
+			updates := map[string]any{"relay_rate_updated_at": rate.UpdatedAt.Format(time.RFC3339Nano), "relay_effective_rate": nil}
+			if rateReady(rate) {
+				effective := *rate.Rate + source.Delta
+				if effective >= 0 && !math.IsNaN(effective) && !math.IsInf(effective, 0) {
+					updates["relay_effective_rate"] = effective
+				}
+			}
+			for _, account := range accounts {
+				if err := s.accountRepo.UpdateExtra(ctx, account.ID, updates); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func (s *RelayStationService) ListRates(ctx context.Context) ([]RelayRateView, error) {
@@ -961,6 +1112,45 @@ func (s *RelayStationService) listRates(onlyStationID string) []RelayRateView {
 		return result[i].StationName < result[j].StationName
 	})
 	return result
+}
+
+// ResolveRouteForAccount resolves the exact relay source represented by a native
+// relay account after the native scheduler has selected it.
+func (s *RelayStationService) ResolveRouteForAccount(ctx context.Context, account *Account, groupID int64) (*RelayRoute, error) {
+	if account == nil || !account.IsRelay() || groupID <= 0 {
+		return nil, ErrRelayRouteNotFound
+	}
+	if err := s.ensureLoaded(ctx); err != nil {
+		return nil, err
+	}
+	configSnapshot := s.snapshotConfig()
+	station, found := findRelayStation(configSnapshot.Stations, account.RelayStationID())
+	if !found {
+		return nil, ErrRelayRouteNotFound
+	}
+	binding, found := findRelayBinding(configSnapshot.Bindings, groupID)
+	if !found {
+		return nil, ErrRelayRouteNotFound
+	}
+	for _, source := range binding.Sources {
+		if source.StationID != station.ID || source.SourceGroup != account.RelaySourceGroup() || !source.Enabled || !station.Enabled {
+			continue
+		}
+		rate := s.snapshotRates().Rates[station.ID][source.SourceGroup]
+		if !rateReadyForRoute(rate, time.Now()) {
+			_ = s.RefreshRates(ctx)
+			rate = s.snapshotRates().Rates[station.ID][source.SourceGroup]
+		}
+		if !rateReadyForRoute(rate, time.Now()) {
+			return nil, ErrRelayRateUnavailable
+		}
+		effectiveRate := *rate.Rate + source.Delta
+		if effectiveRate < 0 || math.IsNaN(effectiveRate) || math.IsInf(effectiveRate, 0) {
+			return nil, ErrRelayRateUnavailable
+		}
+		return &RelayRoute{station: station, source: source, effectiveRate: effectiveRate}, nil
+	}
+	return nil, ErrRelayRouteNotFound
 }
 
 // ResolveRoute returns the cheapest currently-ready source for a new affinity
@@ -1305,6 +1495,9 @@ func (s *RelayStationService) validateStation(station *relayStation) error {
 	station.Name = strings.TrimSpace(station.Name)
 	station.BaseURL = strings.TrimSpace(station.BaseURL)
 	station.ControlURL = strings.TrimSpace(station.ControlURL)
+	if station.Type == RelayStationTypeAIHub && station.BaseURL == "" {
+		station.BaseURL = managedAIHubRouterURL
+	}
 	station.UIPassword = strings.TrimSpace(station.UIPassword)
 	station.ProxyToken = strings.TrimSpace(station.ProxyToken)
 	station.Username = strings.TrimSpace(station.Username)
@@ -1339,7 +1532,13 @@ func (s *RelayStationService) validateStation(station *relayStation) error {
 }
 
 func (s *RelayStationService) applyAIHubConnectionDefaults(station *relayStation) {
-	if station != nil && station.Type == RelayStationTypeAIHub && station.ControlURL == "" {
+	if station == nil || station.Type != RelayStationTypeAIHub {
+		return
+	}
+	if station.BaseURL == "" {
+		station.BaseURL = managedAIHubRouterURL
+	}
+	if station.ControlURL == "" {
 		station.ControlURL = station.BaseURL
 	}
 }

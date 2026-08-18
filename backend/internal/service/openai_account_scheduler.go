@@ -613,8 +613,10 @@ type openAIAccountCandidateScore struct {
 	score     float64
 	priority  int
 	errorRate float64
-	ttft      float64
-	hasTTFT   bool
+	ttft          float64
+	hasTTFT       bool
+	effectiveRate float64
+	hasRate       bool
 }
 
 type openAIAccountCandidateHeap []openAIAccountCandidateScore
@@ -649,11 +651,14 @@ func (h *openAIAccountCandidateHeap) Pop() any {
 }
 
 func isOpenAIAccountCandidateBetter(left openAIAccountCandidateScore, right openAIAccountCandidateScore) bool {
-	if left.score != right.score {
-		return left.score > right.score
-	}
 	if left.account.Priority != right.account.Priority {
 		return left.account.Priority < right.account.Priority
+	}
+	if left.hasRate && right.hasRate && left.effectiveRate != right.effectiveRate {
+		return left.effectiveRate < right.effectiveRate
+	}
+	if left.score != right.score {
+		return left.score > right.score
 	}
 	if left.loadInfo.LoadRate != right.loadInfo.LoadRate {
 		return left.loadInfo.LoadRate < right.loadInfo.LoadRate
@@ -826,13 +831,16 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAIAccountLoadPlan(
 		if s.stats != nil {
 			errorRate, ttft, hasTTFT = s.stats.snapshot(account.ID)
 		}
+		effectiveRate, hasRate := account.RelayEffectiveRate()
 		allCandidates = append(allCandidates, openAIAccountCandidateScore{
-			account:   account,
-			loadInfo:  loadInfo,
-			loadKnown: loadKnown,
-			errorRate: errorRate,
-			ttft:      ttft,
-			hasTTFT:   hasTTFT,
+			account:        account,
+			loadInfo:       loadInfo,
+			loadKnown:      loadKnown,
+			errorRate:      errorRate,
+			ttft:           ttft,
+			hasTTFT:        hasTTFT,
+			effectiveRate:  effectiveRate,
+			hasRate:        hasRate,
 		})
 	}
 

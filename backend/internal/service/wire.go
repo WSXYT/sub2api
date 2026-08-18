@@ -787,8 +787,11 @@ func ProvideAPIKeyService(
 }
 
 // ProvideRelayStationService starts the independent relay price poller.
-func ProvideRelayStationService(settingRepo SettingRepository, groupRepo GroupRepository, usage *UsageService, cfg *config.Config) *RelayStationService {
-	svc := NewRelayStationService(settingRepo, groupRepo, usage, cfg)
+func ProvideRelayStationService(settingRepo SettingRepository, groupRepo GroupRepository, accountRepo AccountRepository, usage *UsageService, cfg *config.Config) *RelayStationService {
+	svc := NewRelayStationService(settingRepo, groupRepo, accountRepo, usage, cfg)
+	if err := svc.SyncNativeRelayAccounts(context.Background()); err != nil {
+		logger.L().With(zap.String("component", "relay_station")).Warn("relay native account sync failed", zap.Error(err))
+	}
 	svc.Start()
 	return svc
 }

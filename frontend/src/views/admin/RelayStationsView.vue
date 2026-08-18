@@ -876,7 +876,7 @@ const accountPlaceholder = computed(() =>
     ? 'admin.relayStations.form.aihubEmailPlaceholder'
     : 'admin.relayStations.form.usernamePlaceholder')
 )
-const showConnectionFields = computed(() => true)
+const showConnectionFields = computed(() => stationForm.type !== 'aihub')
 const showUIPasswordField = computed(
   () =>
     !!editingStation.value &&
@@ -1188,8 +1188,10 @@ async function saveStation(): Promise<void> {
         password: stationForm.password.trim(),
         enabled: true
       }
-      payload.base_url = stationForm.base_url.trim()
-      payload.control_url = stationForm.control_url.trim()
+      if (showConnectionFields.value) {
+        payload.base_url = stationForm.base_url.trim()
+        payload.control_url = stationForm.control_url.trim()
+      }
       await adminAPI.relayStations.create(payload)
       appStore.showSuccess(t('admin.relayStations.createSuccess'))
     }

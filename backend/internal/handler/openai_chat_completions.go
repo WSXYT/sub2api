@@ -166,8 +166,12 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		UpstreamModel:      relayUpstreamModel,
 		Stream:             reqStream,
 		SessionHash:        sessionHash,
-		PricingAt:          pricingAt,
-		ChannelUsageFields: clientRequestedUsageFields(c, channelMapping, reqModel, relayUpstreamModel),
+		PricingAt:           pricingAt,
+		ChannelUsageFields:  clientRequestedUsageFields(c, channelMapping, reqModel, relayUpstreamModel),
+		RequiredCapability:  service.OpenAIEndpointCapabilityChatCompletions,
+		RequiredTransport:   service.OpenAIUpstreamTransportAny,
+		RequestPlatform:     requestPlatform,
+		UseUpstreamTokenCost: true,
 	}, &streamStarted) {
 		return
 	}

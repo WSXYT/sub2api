@@ -79,6 +79,30 @@ func TestValidateStationAllowsPlatformKeyDiscovery(t *testing.T) {
 	}
 }
 
+func TestValidateStationDefaultsManagedAIHubRouterAndControlURL(t *testing.T) {
+	service := &RelayStationService{}
+	aihub := &relayStation{
+		ID: "aihub", Type: RelayStationTypeAIHub, Name: "managed", Username: "user@example.com",
+	}
+	if err := service.validateStation(aihub); err != nil {
+		t.Fatalf("managed aihub station was rejected: %v", err)
+	}
+	if aihub.BaseURL != managedAIHubRouterURL || aihub.ControlURL != managedAIHubRouterURL {
+		t.Fatalf("managed aihub urls = %q/%q, want %q", aihub.BaseURL, aihub.ControlURL, managedAIHubRouterURL)
+	}
+
+	newAPI := &relayStation{
+		ID: "newapi", Type: RelayStationTypeNewAPI, Name: "newapi", BaseURL: "https://relay.example",
+		Username: "admin", Password: "password",
+	}
+	if err := service.validateStation(newAPI); err != nil {
+		t.Fatalf("newapi station without control URL was rejected: %v", err)
+	}
+	if newAPI.ControlURL != newAPI.BaseURL {
+		t.Fatalf("newapi control URL = %q, want %q", newAPI.ControlURL, newAPI.BaseURL)
+	}
+}
+
 func TestListGroupsUsesStationRateSources(t *testing.T) {
 	tests := []struct {
 		name        string

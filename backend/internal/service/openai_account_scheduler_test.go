@@ -3684,3 +3684,23 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_SubscriptionPriorityWai
 	require.Equal(t, int64(38011), selection.WaitPlan.AccountID)
 	require.Equal(t, openAIAccountScheduleLayerLoadBalance, decision.Layer)
 }
+
+func TestOpenAICandidateUsesRelayRateAfterPriority(t *testing.T) {
+	cheaper := openAIAccountCandidateScore{
+		account: &Account{ID: 1, Priority: 10, Extra: map[string]any{relayAccountMarkerKey: true, "relay_effective_rate": 0.4}},
+		loadInfo: &AccountLoadInfo{}, score: 0.1, effectiveRate: 0.4, hasRate: true,
+	}
+	dearer := openAIAccountCandidateScore{
+		account: &Account{ID: 2, Priority: 10, Extra: map[string]any{relayAccountMarkerKey: true, "relay_effective_rate": 0.9}},
+		loadInfo: &AccountLoadInfo{}, score: 100, effectiveRate: 0.9, hasRate: true,
+	}
+	if !isOpenAIAccountCandidateBetter(cheaper, dearer) {
+		t.Fatal("equal-priority candidate with the lower relay rate should win")
+	}
+	if !isOpenAIAccountCandidateBetter(
+		openAIAccountCandidateScore{account: &Account{ID: 3, Priority: 9}, loadInfo: &AccountLoadInfo{}, score: 0},
+		cheaper,
+	) {
+		t.Fatal("higher-priority candidate should win before relay rate")
+	}
+}

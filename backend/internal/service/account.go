@@ -138,6 +138,44 @@ func (a *Account) IsActive() bool {
 	return a.Status == StatusActive
 }
 
+// IsRelay reports whether this native account identity is backed by a relay binding.
+func (a *Account) IsRelay() bool {
+	if a == nil || a.Extra == nil {
+		return false
+	}
+	value, ok := a.Extra[relayAccountMarkerKey].(bool)
+	return ok && value
+}
+
+func (a *Account) RelayStationID() string {
+	if a == nil {
+		return ""
+	}
+	return a.GetExtraString(relayStationIDKey)
+}
+
+func (a *Account) RelaySourceGroup() string {
+	if a == nil {
+		return ""
+	}
+	return a.GetExtraString(relaySourceGroupKey)
+}
+
+func (a *Account) RelayGroupID() int64 {
+	if a == nil || a.Extra == nil {
+		return 0
+	}
+	return ParseExtraInt(a.Extra[relayGroupIDKey])
+}
+
+func (a *Account) RelayEffectiveRate() (float64, bool) {
+	if a == nil || !a.IsRelay() || a.Extra == nil {
+		return 0, false
+	}
+	value, ok := parseExtraFloat64(a.Extra["relay_effective_rate"])
+	return value, ok && value >= 0
+}
+
 // IsSyntheticUITest reports whether the account belongs to an isolated UI load-test
 // dataset. Production accounts never receive this marker. It lets the dedicated
 // test instance exercise interactive quota and connection-test controls without
@@ -1644,6 +1682,9 @@ func (a *Account) GetOpenAISessionID() string {
 }
 
 func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapability) bool {
+	if a != nil && a.IsRelay() {
+		return true
+	}
 	if a == nil {
 		return false
 	}
@@ -1806,6 +1847,9 @@ func (a *Account) openAIEndpointCapabilitySet() (map[string]bool, bool) {
 }
 
 func (a *Account) SupportsOpenAIImageCapability(capability OpenAIImagesCapability) bool {
+	if a != nil && a.IsRelay() {
+		return true
+	}
 	if capability == "" {
 		return true
 	}
