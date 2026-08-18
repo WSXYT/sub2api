@@ -125,7 +125,7 @@ type CreateAccountRequest struct {
 	Extra                   map[string]any `json:"extra"`
 	ProxyID                 *int64         `json:"proxy_id"`
 	Concurrency             int            `json:"concurrency"`
-	Priority                int            `json:"priority"`
+	Priority                *int           `json:"priority"`
 	RateMultiplier          *float64       `json:"rate_multiplier"`
 	LoadFactor              *int           `json:"load_factor"`
 	GroupIDs                []int64        `json:"group_ids"`
@@ -135,8 +135,18 @@ type CreateAccountRequest struct {
 	ConfirmMixedChannelRisk *bool          `json:"confirm_mixed_channel_risk"` // 用户确认混合渠道风险
 }
 
-// UpdateAccountRequest represents update account request
-// 使用指针类型来区分"未提供"和"设置为0"
+func publicAccountPriority(priority *int) (int, error) {
+	if priority == nil {
+		return 1, nil
+	}
+	if *priority <= 0 {
+		return 0, infraerrors.BadRequest("ACCOUNT_PRIORITY_INVALID", "priority must be greater than 0")
+	}
+	return *priority, nil
+}
+
+// UpdateAccountRequest represents update account request.
+// 使用指针类型来区分"未提供"和"设置为0"。
 type UpdateAccountRequest struct {
 	Name                    string         `json:"name"`
 	Notes                   *string        `json:"notes"`
@@ -836,8 +846,9 @@ func (h *AccountHandler) Create(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	if req.Priority <= 0 {
-		response.BadRequest(c, "priority must be greater than 0")
+	priority, err := publicAccountPriority(req.Priority)
+	if err != nil {
+		response.ErrorFrom(c, err)
 		return
 	}
 	if req.RateMultiplier != nil && *req.RateMultiplier < 0 {
@@ -864,7 +875,7 @@ func (h *AccountHandler) Create(c *gin.Context) {
 			Extra:                 req.Extra,
 			ProxyID:               req.ProxyID,
 			Concurrency:           req.Concurrency,
-			Priority:              req.Priority,
+			Priority:              priority,
 			RateMultiplier:        req.RateMultiplier,
 			LoadFactor:            req.LoadFactor,
 			GroupIDs:              req.GroupIDs,
@@ -1912,12 +1923,13 @@ func (h *AccountHandler) BatchCreate(c *gin.Context) {
 		var openaiPrivacyAccounts []*service.Account
 
 		for _, item := range req.Accounts {
-			if item.Priority <= 0 {
+			priority, priorityErr := publicAccountPriority(item.Priority)
+			if priorityErr != nil {
 				failed++
 				results = append(results, gin.H{
 					"name":    item.Name,
 					"success": false,
-					"error":   "priority must be greater than 0",
+					"error":   priorityErr.Error(),
 				})
 				continue
 			}
@@ -1945,7 +1957,7 @@ func (h *AccountHandler) BatchCreate(c *gin.Context) {
 				Extra:                 item.Extra,
 				ProxyID:               item.ProxyID,
 				Concurrency:           item.Concurrency,
-				Priority:              item.Priority,
+				Priority:              priority,
 				RateMultiplier:        item.RateMultiplier,
 				GroupIDs:              item.GroupIDs,
 				ExpiresAt:             item.ExpiresAt,

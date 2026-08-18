@@ -270,15 +270,16 @@ func (h *GrokOAuthHandler) CreateAccountFromOAuth(c *gin.Context) {
 		ProxyID     *int64  `json:"proxy_id"`
 		Name        string  `json:"name"`
 		Concurrency int     `json:"concurrency"`
-		Priority    int     `json:"priority"`
+		Priority    *int    `json:"priority"`
 		GroupIDs    []int64 `json:"group_ids"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
-	if req.Priority <= 0 {
-		response.BadRequest(c, "priority must be greater than 0")
+	priority, err := publicAccountPriority(req.Priority)
+	if err != nil {
+		response.ErrorFrom(c, err)
 		return
 	}
 	tokenInfo, err := h.grokOAuthService.ExchangeCode(c.Request.Context(), &service.GrokExchangeCodeInput{
@@ -309,7 +310,7 @@ func (h *GrokOAuthHandler) CreateAccountFromOAuth(c *gin.Context) {
 		Credentials: credentials,
 		ProxyID:     req.ProxyID,
 		Concurrency: req.Concurrency,
-		Priority:    req.Priority,
+		Priority:    priority,
 		GroupIDs:    req.GroupIDs,
 	})
 	if err != nil {
@@ -331,7 +332,7 @@ type GrokSSOToOAuthRequest struct {
 	Extra              map[string]any `json:"extra"`
 	Concurrency        int            `json:"concurrency"`
 	LoadFactor         *int           `json:"load_factor"`
-	Priority           int            `json:"priority"`
+	Priority           *int           `json:"priority"`
 	RateMultiplier     *float64       `json:"rate_multiplier"`
 	ExpiresAt          *int64         `json:"expires_at"`
 	AutoPauseOnExpired *bool          `json:"auto_pause_on_expired"`
@@ -366,8 +367,8 @@ func (h *GrokOAuthHandler) CreateAccountsFromSSO(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
-	if req.Priority <= 0 {
-		response.BadRequest(c, "priority must be greater than 0")
+	if _, err := publicAccountPriority(req.Priority); err != nil {
+		response.ErrorFrom(c, err)
 		return
 	}
 	tokens := normalizeSSOImportTokens(req.SSOTokens, req.SSOToken)
@@ -434,6 +435,10 @@ func (h *GrokOAuthHandler) createAccountFromSSOToken(ctx context.Context, req Gr
 		return grokSSOImportWorkerResult{item: GrokSSOToOAuthItemResult{Index: index, Error: grokSSOImportErrorMessage(err)}}
 	}
 
+	priority, err := publicAccountPriority(req.Priority)
+	if err != nil {
+		return grokSSOImportWorkerResult{item: GrokSSOToOAuthItemResult{Index: index, Error: err.Error()}}
+	}
 	credentials := grokSSOImportCredentials(h.grokOAuthService.BuildAccountCredentials(tokenInfo), req.Credentials)
 	name := grokSSOImportAccountName(req.Name, tokenInfo, index, total)
 	expiresAt, autoPauseOnExpired := grokSSOImportExpiry(req.ExpiresAt, req.AutoPauseOnExpired, tokenInfo)
@@ -447,7 +452,7 @@ func (h *GrokOAuthHandler) createAccountFromSSOToken(ctx context.Context, req Gr
 		ProxyID:            req.ProxyID,
 		Concurrency:        req.Concurrency,
 		LoadFactor:         req.LoadFactor,
-		Priority:           req.Priority,
+		Priority:           priority,
 		RateMultiplier:     req.RateMultiplier,
 		GroupIDs:           append([]int64(nil), req.GroupIDs...),
 		ExpiresAt:          expiresAt,
