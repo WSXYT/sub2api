@@ -281,6 +281,13 @@
                 <span :class="['h-1.5 w-1.5 rounded-full', getOpenAICompactMeta(row)?.dotClass]" />
                 <span>{{ getOpenAICompactMeta(row)?.label }}</span>
               </div>
+              <span
+                v-if="getRelaySupportedModels(row) !== null"
+                class="max-w-[14rem] truncate pl-0.5 text-[11px] leading-4 text-gray-500 dark:text-gray-400"
+                :title="getRelaySupportedModels(row) || t('admin.accounts.relay.modelsUnknown')"
+              >
+                {{ getRelaySupportedModels(row) ? t('admin.accounts.relay.supportedModels', { models: getRelaySupportedModels(row) }) : t('admin.accounts.relay.modelsUnknown') }}
+              </span>
             </div>
           </template>
           <template #cell-capacity="{ row }">
@@ -1666,6 +1673,14 @@ function getOpenAICompactMeta(row: any): { label: string; className: string; dot
         dotClass: 'bg-slate-300 dark:bg-slate-500'
       }
   }
+}
+
+function getRelaySupportedModels(row: Account): string | null {
+  const extra = row.extra as Record<string, unknown> | undefined
+  if (extra?.relay_account !== true) return null
+  const models = extra.relay_supported_models
+  if (!Array.isArray(models)) return ''
+  return models.filter((model): model is string => typeof model === 'string' && model.trim() !== '').join(', ')
 }
 
 function getOpenAICompactTitle(row: any): string {

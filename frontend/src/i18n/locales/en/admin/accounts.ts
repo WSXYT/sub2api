@@ -21,6 +21,10 @@ export default {
       dataActions: 'Data',
       toolActions: 'Tools',
       viewColumns: 'Columns',
+      relay: {
+        supportedModels: 'AIHub models: {models}',
+        modelsUnknown: 'AIHub models not reported by the upstream'
+      },
       selectedCount: '{count} selected',
       dataExportConfirmMessage: 'The exported data contains sensitive account and proxy information. Store it securely.',
       dataExportConfirm: 'Confirm Export',
