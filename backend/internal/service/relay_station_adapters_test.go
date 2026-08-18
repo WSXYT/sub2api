@@ -161,7 +161,7 @@ func TestRelayEffectiveRateHonorsMaximum(t *testing.T) {
 func TestManagedAIHubConnectionUsesSharedSecrets(t *testing.T) {
 	t.Setenv(managedAIHubUIPasswordEnv, "managed-console-password")
 	t.Setenv(managedAIHubProxyTokenEnv, "managed-proxy-token")
-	station := relayStation{Type: RelayStationTypeAIHub}
+	station := relayStation{Type: RelayStationTypeAIHub, UIPassword: "stale-password", ProxyToken: "stale-token"}
 	(&RelayStationService{}).applyAIHubConnectionDefaults(&station)
 	if station.UIPassword != "managed-console-password" || station.ProxyToken != "managed-proxy-token" {
 		t.Fatalf("managed aihub secrets = %#v", station)

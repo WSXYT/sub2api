@@ -1554,11 +1554,11 @@ func (s *RelayStationService) applyAIHubConnectionDefaults(station *relayStation
 	if station.ControlURL == "" {
 		station.ControlURL = station.BaseURL
 	}
-	if station.UIPassword == "" {
-		station.UIPassword = strings.TrimSpace(os.Getenv(managedAIHubUIPasswordEnv))
+	if uiPassword := strings.TrimSpace(os.Getenv(managedAIHubUIPasswordEnv)); uiPassword != "" {
+		station.UIPassword = uiPassword
 	}
-	if station.ProxyToken == "" {
-		station.ProxyToken = strings.TrimSpace(os.Getenv(managedAIHubProxyTokenEnv))
+	if proxyToken := strings.TrimSpace(os.Getenv(managedAIHubProxyTokenEnv)); proxyToken != "" {
+		station.ProxyToken = proxyToken
 	}
 }
 
