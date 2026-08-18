@@ -965,7 +965,7 @@ function rateStatusLabel(status?: RelayRateStatus): string {
 }
 
 function bindingControlLabel(
-  key: 'group' | 'mode' | 'priceBand' | 'priority' | 'enabled',
+  key: 'group' | 'mode' | 'priceBand' | 'priority' | 'adjustment' | 'enabled',
   source: RelayStationSource
 ): string {
   return `${t(`admin.relayStations.columns.${key}`)}: ${stationById(source.station_id)?.name || source.station_id}`
