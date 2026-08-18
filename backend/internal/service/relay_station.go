@@ -73,6 +73,7 @@ type RelayStationSource struct {
 	SourceGroup string          `json:"source_group,omitempty"`
 	Priority    int             `json:"priority"`
 	Delta       float64         `json:"delta"`
+	MaxRate     *float64        `json:"max_rate,omitempty"`
 	Mode        string          `json:"mode,omitempty"`
 	PriceBand   *RelayPriceBand `json:"price_band,omitempty"`
 }
@@ -751,11 +752,10 @@ func (s *RelayStationService) ListRelayAccounts(ctx context.Context) ([]RelayAcc
 				Priority:    source.Priority,
 				RateStatus:  rate.Status,
 			}
-			if rateReady(rate) {
-				effective := *rate.Rate + source.Delta
-				if effective >= 0 && !math.IsNaN(effective) && !math.IsInf(effective, 0) {
-					account.EffectiveRate = &effective
-				}
+			if effective, ok := relayEffectiveRate(rate, source); ok {
+				account.EffectiveRate = &effective
+			} else if rateReady(rate) {
+				account.RateStatus = RelayRateStatusUnavailable
 			}
 			if station.Type == RelayStationTypeAIHub {
 				if balance, err := s.fetchAIHubBalance(ctx, station); err == nil {
@@ -981,11 +981,8 @@ func (s *RelayStationService) syncNativeRelayRates(ctx context.Context, snapshot
 			}
 			rate := rates.Rates[source.StationID][source.SourceGroup]
 			updates := map[string]any{"relay_rate_updated_at": rate.UpdatedAt.Format(time.RFC3339Nano), "relay_effective_rate": nil}
-			if rateReady(rate) {
-				effective := *rate.Rate + source.Delta
-				if effective >= 0 && !math.IsNaN(effective) && !math.IsInf(effective, 0) {
-					updates["relay_effective_rate"] = effective
-				}
+			if effective, ok := relayEffectiveRate(rate, source); ok {
+				updates["relay_effective_rate"] = effective
 			}
 			for _, account := range accounts {
 				if err := s.accountRepo.UpdateExtra(ctx, account.ID, updates); err != nil {
@@ -1096,11 +1093,8 @@ func (s *RelayStationService) listRates(onlyStationID string) []RelayRateView {
 				Rate:        cloneFloat64(rate.Rate),
 				UpdatedAt:   rate.UpdatedAt,
 			}
-			if rateReady(rate) {
-				effective := *rate.Rate + source.Delta
-				if effective >= 0 && !math.IsNaN(effective) && !math.IsInf(effective, 0) {
-					view.EffectiveRate = &effective
-				}
+			if effective, ok := relayEffectiveRate(rate, source); ok {
+				view.EffectiveRate = &effective
 			}
 			result = append(result, view)
 		}
@@ -1144,8 +1138,8 @@ func (s *RelayStationService) ResolveRouteForAccount(ctx context.Context, accoun
 		if !rateReadyForRoute(rate, time.Now()) {
 			return nil, ErrRelayRateUnavailable
 		}
-		effectiveRate := *rate.Rate + source.Delta
-		if effectiveRate < 0 || math.IsNaN(effectiveRate) || math.IsInf(effectiveRate, 0) {
+		effectiveRate, ok := relayEffectiveRate(rate, source)
+		if !ok {
 			return nil, ErrRelayRateUnavailable
 		}
 		return &RelayRoute{station: station, source: source, effectiveRate: effectiveRate}, nil
@@ -1200,8 +1194,8 @@ func (s *RelayStationService) ResolveRoute(ctx context.Context, groupID int64, a
 		if !rateReadyForRoute(rate, now) {
 			continue
 		}
-		effectiveRate := *rate.Rate + source.Delta
-		if effectiveRate < 0 || math.IsNaN(effectiveRate) || math.IsInf(effectiveRate, 0) {
+		effectiveRate, ok := relayEffectiveRate(rate, source)
+		if !ok {
 			continue
 		}
 		candidate := &RelayRoute{station: station, source: source, effectiveRate: effectiveRate}
@@ -1279,9 +1273,7 @@ func (s *RelayStationService) EstimateProfit(ctx context.Context, start, end tim
 				TotalCost:      stat.Cost,
 				DownstreamRate: group.RateMultiplier,
 			}
-			if rateReady(rate) {
-				upstreamRate := *rate.Rate + source.Delta
-				if upstreamRate >= 0 && !math.IsNaN(upstreamRate) && !math.IsInf(upstreamRate, 0) {
+			if upstreamRate, ok := relayEffectiveRate(rate, source); ok {
 					revenue := stat.Cost * group.RateMultiplier
 					cost := stat.Cost * upstreamRate
 					profit := revenue - cost
@@ -1290,7 +1282,6 @@ func (s *RelayStationService) EstimateProfit(ctx context.Context, start, end tim
 					estimate.EstimatedCost = &cost
 					estimate.EstimatedProfit = &profit
 				}
-			}
 			result = append(result, estimate)
 		}
 	}
@@ -1457,6 +1448,9 @@ func (s *RelayStationService) validateConfig(candidate *relayStationConfig) erro
 			}
 			if math.IsNaN(source.Delta) || math.IsInf(source.Delta, 0) {
 				return infraerrors.BadRequest("RELAY_DELTA_INVALID", "relay source delta must be finite")
+			}
+			if source.MaxRate != nil && (*source.MaxRate < 0 || math.IsNaN(*source.MaxRate) || math.IsInf(*source.MaxRate, 0)) {
+				return infraerrors.BadRequest("RELAY_MAX_RATE_INVALID", "relay source max_rate must be a finite non-negative number")
 			}
 			if station.Type == RelayStationTypeAIHub && source.Mode != "" {
 				switch source.Mode {
@@ -1678,6 +1672,24 @@ func validRelaySourceGroup(value string) bool {
 		}
 	}
 	return true
+}
+
+func relayEffectiveRate(rate RelayStationRate, source RelayStationSource) (float64, bool) {
+	if !rateReady(rate) {
+		return 0, false
+	}
+	upstream := *rate.Rate
+	if source.MaxRate != nil && upstream > *source.MaxRate {
+		return 0, false
+	}
+	effective := upstream + source.Delta
+	if source.MaxRate != nil && effective > *source.MaxRate {
+		effective = *source.MaxRate
+	}
+	if effective < 0 || math.IsNaN(effective) || math.IsInf(effective, 0) {
+		return 0, false
+	}
+	return effective, true
 }
 
 func rateReady(rate RelayStationRate) bool {

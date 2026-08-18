@@ -103,6 +103,19 @@ func TestValidateStationDefaultsManagedAIHubRouterAndControlURL(t *testing.T) {
 	}
 }
 
+func TestRelayEffectiveRateHonorsMaximum(t *testing.T) {
+	first := 0.09
+	second := 0.12
+	maxRate := 0.1
+	got, ok := relayEffectiveRate(RelayStationRate{Rate: &first, Status: RelayRateStatusReady}, RelayStationSource{Delta: 0.02, MaxRate: &maxRate})
+	if !ok || got != 0.1 {
+		t.Fatalf("capped effective rate = %v/%v, want 0.1/true", got, ok)
+	}
+	if _, ok := relayEffectiveRate(RelayStationRate{Rate: &second, Status: RelayRateStatusReady}, RelayStationSource{Delta: 0.02, MaxRate: &maxRate}); ok {
+		t.Fatal("source above maximum upstream rate remained routeable")
+	}
+}
+
 func TestListGroupsUsesStationRateSources(t *testing.T) {
 	tests := []struct {
 		name        string

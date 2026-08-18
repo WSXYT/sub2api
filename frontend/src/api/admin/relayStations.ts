@@ -62,6 +62,7 @@ export interface RelayStationSource {
 	source_group: string;
 	priority: number;
 	delta: number;
+	max_rate?: number | null;
 	mode?: string;
 	price_band?: RelayPriceBand;
 }
@@ -135,6 +136,7 @@ const secretFields = [
 export function effectiveRelayRate(
 	rate: RelayRate | undefined,
 	delta: number,
+	maxRate?: number | null,
 ): number | null {
 	if (
 		rate?.status !== "ready" ||
@@ -143,7 +145,8 @@ export function effectiveRelayRate(
 	) {
 		return null;
 	}
-	const value = rate.rate + Number(delta);
+	if (maxRate != null && rate.rate > maxRate) return null;
+	const value = Math.min(rate.rate + Number(delta), maxRate ?? Number.POSITIVE_INFINITY);
 	return Number.isFinite(value) && value >= 0 ? value : null;
 }
 

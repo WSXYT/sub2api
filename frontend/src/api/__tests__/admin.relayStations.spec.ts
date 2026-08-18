@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { get, patch, put } = vi.hoisted(() => ({ get: vi.fn(), patch: vi.fn(), put: vi.fn() }));
+const { get, patch, put } = vi.hoisted(() => ({
+	get: vi.fn(),
+	patch: vi.fn(),
+	put: vi.fn(),
+}));
 
 vi.mock("@/api/client", () => ({ apiClient: { get, patch, put } }));
 
@@ -49,7 +53,9 @@ describe("admin relay stations API", () => {
 		get.mockResolvedValue({ data: { accounts: [{ station_id: "station-1" }] } });
 		patch.mockResolvedValue({ data: { updated: true } });
 
-		await expect(listRelayAccounts()).resolves.toEqual([{ station_id: "station-1" }]);
+		await expect(listRelayAccounts()).resolves.toEqual([
+			{ station_id: "station-1" },
+		]);
 		await updateRelayAccount("station-1", {
 			group_id: 7,
 			source_group: "default",
@@ -57,17 +63,22 @@ describe("admin relay stations API", () => {
 		});
 
 		expect(get).toHaveBeenCalledWith("/admin/relay-stations/accounts");
-		expect(patch).toHaveBeenCalledWith("/admin/relay-stations/accounts/station-1", {
-			group_id: 7,
-			source_group: "default",
-			priority: 100,
-		});
+		expect(patch).toHaveBeenCalledWith(
+			"/admin/relay-stations/accounts/station-1",
+			{
+				group_id: 7,
+				source_group: "default",
+				priority: 100,
+			},
+		);
 	});
 
 	it("calculates only usable non-negative effective rates", () => {
 		expect(effectiveRelayRate(readyRate, -0.1)).toBeCloseTo(0.7);
 		expect(effectiveRelayRate({ ...readyRate, status: "stale" }, 0)).toBeNull();
 		expect(effectiveRelayRate(readyRate, -1)).toBeNull();
+		expect(effectiveRelayRate({ ...readyRate, rate: 0.09 }, 0.02, 0.1)).toBeCloseTo(0.1);
+		expect(effectiveRelayRate({ ...readyRate, rate: 0.12 }, 0.02, 0.1)).toBeNull();
 	});
 
 	it("reads semantic backend error reasons", () => {

@@ -318,6 +318,29 @@
               />
             </template>
 
+            <template #cell-adjustment="{ row }">
+              <div class="flex min-w-52 items-center gap-2">
+                <input
+                  :value="row.delta"
+                  type="number"
+                  step="0.0001"
+                  class="input w-24"
+                  :aria-label="`${bindingControlLabel('adjustment', row)}: ${t('admin.relayStations.binding.adjustment')}`"
+                  @input="updateSourceDelta(row, $event)"
+                />
+                <input
+                  :value="row.max_rate ?? ''"
+                  type="number"
+                  min="0"
+                  step="0.0001"
+                  class="input w-24"
+                  :aria-label="`${bindingControlLabel('adjustment', row)}: ${t('admin.relayStations.binding.maxRate')}`"
+                  :placeholder="t('admin.relayStations.binding.noMaxRate')"
+                  @input="updateSourceMaxRate(row, $event)"
+                />
+              </div>
+            </template>
+
             <template #cell-group="{ row }">
               <div v-if="stationById(row.station_id)?.type === 'aihub'" class="text-sm text-gray-500 dark:text-dark-300">
                 {{ t('admin.relayStations.binding.autoSelect') }}
@@ -803,6 +826,7 @@ const modeOptions = computed(() =>
 const bindingColumns = computed<Column[]>(() => [
   { key: 'station', label: t('admin.relayStations.columns.station') },
   { key: 'priority', label: t('admin.relayStations.columns.priority') },
+  { key: 'adjustment', label: t('admin.relayStations.columns.adjustment') },
   { key: 'group', label: t('admin.relayStations.columns.group') },
   { key: 'mode', label: t('admin.relayStations.columns.mode') },
   { key: 'price_band', label: t('admin.relayStations.columns.priceBand') },
@@ -970,7 +994,7 @@ function rateForSource(source: RelayStationSource): RelayRate | undefined {
 }
 
 function sourceEffectiveRate(source: RelayStationSource): number | null {
-  return effectiveRelayRate(rateForSource(source), source.delta)
+  return effectiveRelayRate(rateForSource(source), source.delta, source.max_rate)
 }
 
 function isLowestSource(source: RelayStationSource): boolean {
@@ -1296,6 +1320,17 @@ function updateSourceEnabled(source: RelayStationSource, enabled: boolean): void
   bindingsDirty.value = true
 }
 
+function updateSourceDelta(source: RelayStationSource, event: Event): void {
+  source.delta = Number((event.target as HTMLInputElement).value)
+  bindingsDirty.value = true
+}
+
+function updateSourceMaxRate(source: RelayStationSource, event: Event): void {
+  const value = (event.target as HTMLInputElement).value.trim()
+  source.max_rate = value === '' ? null : Number(value)
+  bindingsDirty.value = true
+}
+
 function hasControlCharacter(value: string): boolean {
   return Array.from(value).some((character) => {
     const code = character.charCodeAt(0)
@@ -1320,6 +1355,7 @@ function normalizedBindings(): RelayGroupBinding[] | null {
           station_id: source.station_id.trim(),
           source_group: source.source_group?.trim() || 'default',
           delta: Number(source.delta ?? 0),
+          max_rate: source.max_rate == null ? undefined : Number(source.max_rate),
           mode: station?.type === 'aihub' ? sourceMode(source) : undefined,
           price_band: priceBand && (priceBand.min !== undefined || priceBand.max !== undefined)
             ? priceBand
@@ -1337,6 +1373,10 @@ function normalizedBindings(): RelayGroupBinding[] | null {
       }
       if (!Number.isFinite(source.delta)) {
         appStore.showError(t('admin.relayStations.binding.rateAdjustmentInvalid'))
+        return null
+      }
+      if (source.max_rate !== undefined && source.max_rate !== null && (!Number.isFinite(source.max_rate) || source.max_rate < 0)) {
+        appStore.showError(t('admin.relayStations.binding.maxRateInvalid'))
         return null
       }
       if (source.price_band) {
