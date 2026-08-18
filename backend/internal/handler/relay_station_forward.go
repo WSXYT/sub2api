@@ -20,20 +20,20 @@ import (
 const relayUsageCaptureLimit = 2 << 20
 
 type relayOpenAIForwardInput struct {
-	APIKey             *service.APIKey
-	Subscription       *service.UserSubscription
-	Body               []byte
-	OriginalModel      string
-	UpstreamModel      string
-	Stream             bool
-	SessionHash        string
-	PricingAt          time.Time
-	ChannelUsageFields  service.ChannelUsageFields
-	RequiredCapability  service.OpenAIEndpointCapability
-	RequiredTransport   service.OpenAIUpstreamTransport
-	RequestPlatform     string
-	RequireCompact      bool
-	UseUpstreamTokenCost bool
+	APIKey	*service.APIKey
+	Subscription	*service.UserSubscription
+	Body	[]byte
+	OriginalModel	string
+	UpstreamModel	string
+	Stream	bool
+	SessionHash	string
+	PricingAt	time.Time
+	ChannelUsageFields	service.ChannelUsageFields
+	RequiredCapability	service.OpenAIEndpointCapability
+	RequiredTransport	service.OpenAIUpstreamTransport
+	RequestPlatform	string
+	RequireCompact	bool
+	UseUpstreamTokenCost	bool
 }
 
 // tryRelayOpenAIForward lets the native scheduler choose a relay Account. A

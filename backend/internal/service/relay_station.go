@@ -1565,7 +1565,7 @@ func (s *RelayStationService) applyAIHubConnectionDefaults(station *relayStation
 func relayAIHubPolicyForSource(source RelayStationSource) relayAIHubConfig {
 	policy := relayAIHubConfig{
 		Mode:             source.Mode,
-		AccountPoolPlans: append([]string(nil), source.AccountPools...),
+		AccountPoolPlans: append([]string{}, source.AccountPools...),
 	}
 	if source.MaxRate != nil {
 		min := 0.0

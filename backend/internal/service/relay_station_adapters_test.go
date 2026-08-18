@@ -392,14 +392,13 @@ func TestFetchAIHubRatesSwitchesAccounts(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	service := &RelayStationService{}
 	stations := []relayStation{
 		{ID: "one", Type: RelayStationTypeAIHub, BaseURL: upstream.URL, ControlURL: upstream.URL, Username: "one@example.com", Password: "one"},
 		{ID: "two", Type: RelayStationTypeAIHub, BaseURL: upstream.URL, ControlURL: upstream.URL, Username: "two@example.com", Password: "two"},
 		{ID: "one", Type: RelayStationTypeAIHub, BaseURL: upstream.URL, ControlURL: upstream.URL, Username: "one@example.com", Password: "one"},
 	}
 	for index, station := range stations {
-		rates, err := service.fetchAIHubRates(context.Background(), station, map[string]struct{}{"default": {}})
+		rates, err := (&RelayStationService{}).fetchAIHubRates(context.Background(), station, map[string]struct{}{"default": {}})
 		if err != nil {
 			t.Fatalf("fetch account %s rates: %v", station.ID, err)
 		}
