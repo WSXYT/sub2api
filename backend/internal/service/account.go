@@ -856,6 +856,43 @@ func resolveRequestedModelInMapping(mapping map[string]string, requestedModel st
 	return matchWildcardMappingResult(mapping, requestedModel)
 }
 
+func relayAccountSupportsModel(account *Account, requestedModel string) bool {
+	if account == nil || account.Extra == nil {
+		return true
+	}
+	known, ok := account.Extra["relay_model_capability_known"].(bool)
+	if !ok || !known {
+		return true
+	}
+	raw, ok := account.Extra["relay_supported_models"]
+	if !ok {
+		return false
+	}
+	models, ok := raw.([]any)
+	if !ok {
+		if values, isStrings := raw.([]string); isStrings {
+			models = make([]any, len(values))
+			for i := range values {
+				models[i] = values[i]
+			}
+		} else {
+			return true
+		}
+	}
+	requested := strings.ToLower(strings.TrimSpace(requestedModel))
+	for _, item := range models {
+		model, ok := item.(string)
+		if !ok {
+			continue
+		}
+		model = strings.ToLower(strings.TrimSpace(model))
+		if model == requested || (strings.HasSuffix(model, "*") && strings.HasPrefix(requested, strings.TrimSuffix(model, "*"))) {
+			return true
+		}
+	}
+	return false
+}
+
 // IsModelSupported 检查模型是否在 model_mapping 中（支持通配符）
 // 如果未配置 mapping，返回 true（允许所有模型）。
 //
@@ -865,6 +902,9 @@ func resolveRequestedModelInMapping(mapping map[string]string, requestedModel st
 // 请求卡死在该账号上、无法 failover 到真正支持该模型的 API Key 账号（#3662）。
 // 未知/自定义别名仍保持允许（兼容渠道级映射），见 isOpenAIOAuthServableModel。
 func (a *Account) IsModelSupported(requestedModel string) bool {
+	if a.IsRelay() {
+		return relayAccountSupportsModel(a, requestedModel)
+	}
 	// 透传模式仅替换认证、模型语义完全交由上游决定，因此放行所有模型。
 	// 该短路必须在 model_mapping 判定之前：账号从"白名单模式"切换到透传后，
 	// credentials 里常残留旧的非空 model_mapping，若不在此放行，透传账号会被

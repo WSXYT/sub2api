@@ -103,6 +103,20 @@ func TestValidateStationDefaultsManagedAIHubRouterAndControlURL(t *testing.T) {
 	}
 }
 
+func TestRelayAccountUsesUpstreamModelCapabilitySnapshot(t *testing.T) {
+	account := &Account{Extra: map[string]any{
+		relayAccountMarkerKey:          true,
+		"relay_model_capability_known": true,
+		"relay_supported_models":      []any{"gpt-5", "claude-*"},
+	}}
+	if !account.IsModelSupported("gpt-5") || !account.IsModelSupported("claude-sonnet-4") {
+		t.Fatal("relay account rejected a model from the upstream capability snapshot")
+	}
+	if account.IsModelSupported("gemini-2.5-pro") {
+		t.Fatal("relay account accepted a model outside the upstream capability snapshot")
+	}
+}
+
 func TestRelayEffectiveRateHonorsMaximum(t *testing.T) {
 	first := 0.09
 	second := 0.12

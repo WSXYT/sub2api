@@ -199,7 +199,7 @@ func (s *RelayStationService) fetchAIHubRates(ctx context.Context, station relay
 			result[sourceGroup] = RelayStationRate{Status: RelayRateStatusUnavailable}
 			continue
 		}
-		result[sourceGroup] = RelayStationRate{Rate: cloneFloat64(candidate.Rate), Status: RelayRateStatusReady}
+		result[sourceGroup] = RelayStationRate{Rate: cloneFloat64(candidate.Rate), Status: RelayRateStatusReady, SupportedModels: append([]string(nil), candidate.Models...)}
 	}
 	return result, nil
 }
@@ -325,6 +325,7 @@ type relayAIHubStatusCandidate struct {
 	GroupID  int64    `json:"groupId"`
 	Code     string   `json:"code"`
 	Rate     *float64 `json:"rate"`
+	Models   []string `json:"models"`
 	Excluded bool     `json:"excluded"`
 }
 

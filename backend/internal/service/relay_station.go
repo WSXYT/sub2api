@@ -175,9 +175,10 @@ type relayStationConfig struct {
 
 // RelayStationRate is the raw station rate before the binding delta is applied.
 type RelayStationRate struct {
-	Rate      *float64  `json:"rate"`
-	Status    string    `json:"status"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Rate           *float64 `json:"rate"`
+	Status         string   `json:"status"`
+	SupportedModels []string `json:"supported_models,omitempty"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 type relayRateCache struct {
@@ -980,7 +981,12 @@ func (s *RelayStationService) syncNativeRelayRates(ctx context.Context, snapshot
 				continue
 			}
 			rate := rates.Rates[source.StationID][source.SourceGroup]
-			updates := map[string]any{"relay_rate_updated_at": rate.UpdatedAt.Format(time.RFC3339Nano), "relay_effective_rate": nil}
+			updates := map[string]any{
+				"relay_rate_updated_at":          rate.UpdatedAt.Format(time.RFC3339Nano),
+				"relay_effective_rate":            nil,
+				"relay_model_capability_known":   rate.SupportedModels != nil,
+				"relay_supported_models":         rate.SupportedModels,
+			}
 			if effective, ok := relayEffectiveRate(rate, source); ok {
 				updates["relay_effective_rate"] = effective
 			}
