@@ -331,6 +331,9 @@ const (
 	relayStationIDKey     = "relay_station_id"
 	relayGroupIDKey       = "relay_group_id"
 	relaySourceGroupKey   = "relay_source_group"
+
+	relaySourcePriorityLimit = 1_000_000
+	relayNativePriorityBase  = relaySourcePriorityLimit + 1
 )
 
 // SyncNativeRelayAccounts creates the native Account identities represented by
@@ -379,10 +382,14 @@ func (s *RelayStationService) SyncNativeRelayAccounts(ctx context.Context) error
 			}
 			key := relayAccountKey(station.ID, binding.GroupID, source.SourceGroup)
 			for _, account := range existingByKey[key] {
-				if !source.Enabled || !station.Enabled {
-					if err := s.accountRepo.SetSchedulable(ctx, account.ID, false); err != nil {
-						return err
-					}
+				account.Name = fmt.Sprintf("%s / %s", station.Name, source.SourceGroup)
+				account.Priority = relayNativePriority(source.Priority)
+				account.Schedulable = source.Enabled && station.Enabled
+				if err := s.accountRepo.Update(ctx, &account); err != nil {
+					return err
+				}
+				if err := s.accountRepo.BindGroups(ctx, account.ID, []int64{binding.GroupID}); err != nil {
+					return err
 				}
 			}
 			if len(existingByKey[key]) > 0 {
@@ -395,7 +402,7 @@ func (s *RelayStationService) SyncNativeRelayAccounts(ctx context.Context) error
 				Credentials:    map[string]any{},
 				Extra:          map[string]any{relayAccountMarkerKey: true, relayAccountKeyKey: key, relayStationIDKey: station.ID, relayGroupIDKey: binding.GroupID, relaySourceGroupKey: source.SourceGroup},
 				Concurrency:    3,
-				Priority:       -source.Priority,
+				Priority:       relayNativePriority(source.Priority),
 				Status:         StatusActive,
 				Schedulable:    source.Enabled && station.Enabled,
 				RateMultiplier: func() *float64 { value := 1.0; return &value }(),
@@ -423,6 +430,37 @@ func (s *RelayStationService) SyncNativeRelayAccounts(ctx context.Context) error
 
 func relayAccountKey(stationID string, groupID int64, sourceGroup string) string {
 	return fmt.Sprintf("%s:%d:%s", stationID, groupID, sourceGroup)
+}
+
+func relayNativePriority(sourcePriority int) int {
+	return relayNativePriorityBase - sourcePriority
+}
+
+func relaySourcePriorityForNative(nativePriority int) (int, error) {
+	if nativePriority <= 0 || nativePriority > relayNativePriorityBase+relaySourcePriorityLimit {
+		return 0, infraerrors.BadRequest("RELAY_PRIORITY_INVALID", "relay account priority must be between 1 and 2000001")
+	}
+	return relayNativePriorityBase - nativePriority, nil
+}
+
+// UpdateRelayAccountNativePriority keeps the native Account control surface and
+// the relay source configuration in sync.
+func (s *RelayStationService) UpdateRelayAccountNativePriority(ctx context.Context, account *Account, nativePriority int) error {
+	if account == nil || !account.IsRelay() {
+		return infraerrors.BadRequest("RELAY_ACCOUNT_INVALID", "relay account is required")
+	}
+	sourcePriority, err := relaySourcePriorityForNative(nativePriority)
+	if err != nil {
+		return err
+	}
+	return s.UpdateRelayAccount(ctx, account.RelayStationID(), account.RelayGroupID(), account.RelaySourceGroup(), RelayAccountUpdateInput{Priority: &sourcePriority})
+}
+
+func (s *RelayStationService) syncNativeRelayState(ctx context.Context) error {
+	if err := s.SyncNativeRelayAccounts(ctx); err != nil {
+		return err
+	}
+	return s.syncNativeRelayRates(ctx, s.snapshotConfig(), s.snapshotRates())
 }
 
 // Start begins best-effort periodic rate polling and aihub configuration sync.
@@ -617,7 +655,7 @@ func (s *RelayStationService) CreateStation(ctx context.Context, input RelayStat
 	s.config = candidate
 	s.clearRoutesLocked()
 	s.mu.Unlock()
-	if err := s.SyncNativeRelayAccounts(ctx); err != nil {
+	if err := s.syncNativeRelayState(ctx); err != nil {
 		return nil, err
 	}
 
@@ -683,7 +721,7 @@ func (s *RelayStationService) UpdateStation(ctx context.Context, id string, inpu
 	if stationType == RelayStationTypeAIHub {
 		s.clearActiveAIHubStation(id)
 	}
-	if err := s.SyncNativeRelayAccounts(ctx); err != nil {
+	if err := s.syncNativeRelayState(ctx); err != nil {
 		return nil, err
 	}
 	return &view, nil
@@ -723,7 +761,7 @@ func (s *RelayStationService) DeleteStation(ctx context.Context, id string) erro
 	if stationType == RelayStationTypeAIHub {
 		s.clearActiveAIHubStation(id)
 	}
-	return nil
+	return s.syncNativeRelayState(ctx)
 }
 
 func (s *RelayStationService) ListRelayAccounts(ctx context.Context) ([]RelayAccountView, error) {
@@ -832,7 +870,7 @@ func (s *RelayStationService) UpdateRelayAccount(ctx context.Context, stationID 
 		s.clearRoutesLocked()
 		s.mu.Unlock()
 		s.clearActiveAIHubStation(stationID)
-		return nil
+		return s.syncNativeRelayState(ctx)
 	}
 	s.mu.Unlock()
 	return infraerrors.New(http.StatusNotFound, "RELAY_ACCOUNT_NOT_FOUND", "relay account was not found")
@@ -869,7 +907,7 @@ func (s *RelayStationService) UpdateBindings(ctx context.Context, bindings []Rel
 	result := cloneRelayBindings(candidate.Bindings)
 	s.mu.Unlock()
 	s.clearActiveAIHubStation("")
-	if err := s.SyncNativeRelayAccounts(ctx); err != nil {
+	if err := s.syncNativeRelayState(ctx); err != nil {
 		return nil, err
 	}
 	return result, nil
@@ -972,8 +1010,11 @@ func (s *RelayStationService) refreshRates(ctx context.Context, onlyStationID st
 }
 
 func (s *RelayStationService) syncNativeRelayRates(ctx context.Context, snapshot relayStationConfig, rates relayRateCache) error {
-	if s == nil || s.accountRepo == nil {
+	if s == nil {
 		return nil
+	}
+	if s.accountRepo == nil {
+		return s.syncRelayGroupRateMultipliers(ctx, snapshot, rates)
 	}
 	stations := relayStationMap(snapshot.Stations)
 	for _, binding := range snapshot.Bindings {
@@ -1006,6 +1047,48 @@ func (s *RelayStationService) syncNativeRelayRates(ctx context.Context, snapshot
 					return err
 				}
 			}
+		}
+	}
+	return s.syncRelayGroupRateMultipliers(ctx, snapshot, rates)
+}
+
+func (s *RelayStationService) syncRelayGroupRateMultipliers(ctx context.Context, snapshot relayStationConfig, rates relayRateCache) error {
+	if s == nil || s.groupRepo == nil {
+		return nil
+	}
+	stations := relayStationMap(snapshot.Stations)
+	multipliers := make(map[int64]float64)
+	now := time.Now()
+	for _, binding := range snapshot.Bindings {
+		for _, source := range binding.Sources {
+			station, found := stations[source.StationID]
+			if !found || !station.Enabled || !source.Enabled || (station.Type == RelayStationTypeAIHub && strings.TrimSpace(station.BaseURL) == "") {
+				continue
+			}
+			rate := rates.Rates[source.StationID][source.SourceGroup]
+			if !rateReadyForRoute(rate, now) {
+				continue
+			}
+			effective, ok := relayEffectiveRate(rate, source)
+			if !ok {
+				continue
+			}
+			if current, exists := multipliers[binding.GroupID]; !exists || effective > current {
+				multipliers[binding.GroupID] = effective
+			}
+		}
+	}
+	for groupID, multiplier := range multipliers {
+		group, err := s.groupRepo.GetByID(ctx, groupID)
+		if err != nil {
+			return err
+		}
+		if group.RateMultiplier == multiplier {
+			continue
+		}
+		group.RateMultiplier = multiplier
+		if err := s.groupRepo.Update(ctx, group); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -1465,7 +1548,7 @@ func (s *RelayStationService) validateConfig(candidate *relayStationConfig) erro
 			if !validRelaySourceGroup(source.SourceGroup) {
 				return infraerrors.BadRequest("RELAY_SOURCE_GROUP_INVALID", "relay source_group is invalid")
 			}
-			if source.Priority < -1_000_000 || source.Priority > 1_000_000 {
+			if source.Priority < -relaySourcePriorityLimit || source.Priority > relaySourcePriorityLimit {
 				return infraerrors.BadRequest("RELAY_PRIORITY_INVALID", "relay source priority must be between -1000000 and 1000000")
 			}
 			if math.IsNaN(source.Delta) || math.IsInf(source.Delta, 0) {

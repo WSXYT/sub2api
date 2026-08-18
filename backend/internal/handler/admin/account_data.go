@@ -699,8 +699,8 @@ func validateDataAccount(item DataAccount) error {
 	if item.Concurrency < 0 {
 		return errors.New("concurrency must be >= 0")
 	}
-	if item.Priority < 0 {
-		return errors.New("priority must be >= 0")
+	if item.Priority <= 0 {
+		return errors.New("priority must be greater than 0")
 	}
 	return nil
 }

@@ -64,6 +64,11 @@ type AccountHandler struct {
 	grokImportProber        grokImportProber
 	upstreamBillingProbe    *service.UpstreamBillingProbeService
 	ollamaCloudUsage        *service.OllamaCloudUsageService
+	relayService            *service.RelayStationService
+}
+
+func (h *AccountHandler) SetRelayStationService(relayService *service.RelayStationService) {
+	h.relayService = relayService
 }
 
 // SetUpstreamBillingProbeService attaches the optional remote billing probe service.
@@ -973,6 +978,24 @@ func (h *AccountHandler) Update(c *gin.Context) {
 
 	// 确定是否跳过混合渠道检查
 	skipCheck := req.ConfirmMixedChannelRisk != nil && *req.ConfirmMixedChannelRisk
+	if req.Priority != nil {
+		managedAccount, err := h.adminService.GetAccount(c.Request.Context(), accountID)
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+		if managedAccount.IsRelay() {
+			if h.relayService == nil {
+				response.ErrorFrom(c, infraerrors.New(http.StatusServiceUnavailable, "RELAY_SERVICE_UNAVAILABLE", "relay station service is unavailable"))
+				return
+			}
+			if err := h.relayService.UpdateRelayAccountNativePriority(c.Request.Context(), managedAccount, *req.Priority); err != nil {
+				response.ErrorFrom(c, err)
+				return
+			}
+			req.Priority = nil
+		}
+	}
 
 	account, err := h.adminService.UpdateAccount(c.Request.Context(), accountID, &service.UpdateAccountInput{
 		Name:                  req.Name,

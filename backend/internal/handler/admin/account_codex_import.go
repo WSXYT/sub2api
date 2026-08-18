@@ -129,8 +129,8 @@ func (h *AccountHandler) ImportCodexSession(c *gin.Context) {
 		response.BadRequest(c, "concurrency must be >= 0")
 		return
 	}
-	if req.Priority != nil && *req.Priority < 0 {
-		response.BadRequest(c, "priority must be >= 0")
+	if req.Priority != nil && *req.Priority <= 0 {
+		response.BadRequest(c, "priority must be greater than 0")
 		return
 	}
 	if req.RateMultiplier != nil && *req.RateMultiplier < 0 {

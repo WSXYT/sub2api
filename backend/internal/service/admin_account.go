@@ -396,7 +396,17 @@ func normalizeOpenAILongContextBillingUpdateExtra(account *Account, input *Updat
 
 // Grok media eligibility helpers live in account_grok_media_eligibility.go.
 
+func validateNativeAccountPriority(priority int) error {
+	if priority <= 0 {
+		return infraerrors.BadRequest("ACCOUNT_PRIORITY_INVALID", "priority must be greater than 0")
+	}
+	return nil
+}
+
 func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]any) (*Account, error) {
+	if err := validateNativeAccountPriority(input.Priority); err != nil {
+		return nil, err
+	}
 	// Probe/session state is system-managed. New accounts always start with automatic refresh disabled.
 	delete(accountExtra, UpstreamBillingProbeEnabledExtraKey)
 	delete(accountExtra, UpstreamBillingRateSyncEnabledExtraKey)
@@ -545,6 +555,11 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	account, err := s.accountRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+	if input.Priority != nil {
+		if err := validateNativeAccountPriority(*input.Priority); err != nil {
+			return nil, err
+		}
 	}
 	var normalizedExtra map[string]any
 	if input.Extra != nil {
@@ -732,7 +747,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if input.Concurrency != nil {
 		account.Concurrency = normalizeAccountConcurrency(account.Platform, account.Type, *input.Concurrency)
 	}
-	// 只在指针非 nil 时更新 Priority（支持设置为 0）
+	// 只在指针非 nil 时更新 Priority（已经在入口处验证为正数）。
 	if input.Priority != nil {
 		account.Priority = *input.Priority
 	}
@@ -912,7 +927,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 
 	// 预取所有目标账号，供凭据守卫/代理守卫/混合渠道检查共用，避免多次 DB 查询。
 	var cachedTargets []*Account
-	if len(input.Credentials) > 0 || input.ProxyID != nil || needMixedChannelCheck || hasLongContextBillingUpdate || input.ProbeEnabled != nil || input.RateMultiplier != nil {
+	if len(input.Credentials) > 0 || input.ProxyID != nil || needMixedChannelCheck || hasLongContextBillingUpdate || input.ProbeEnabled != nil || input.Priority != nil || input.RateMultiplier != nil {
 		loaded, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
 		if err != nil {
 			return nil, err
@@ -990,6 +1005,17 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 			}
 			if err := s.checkMixedChannelRisk(ctx, accountID, platform, *input.GroupIDs); err != nil {
 				return nil, err
+			}
+		}
+	}
+
+	if input.Priority != nil {
+		if err := validateNativeAccountPriority(*input.Priority); err != nil {
+			return nil, err
+		}
+		for _, account := range cachedTargets {
+			if account != nil && account.IsRelay() {
+				return nil, infraerrors.BadRequest("RELAY_PRIORITY_BULK_UNSUPPORTED", "update relay account priorities individually")
 			}
 		}
 	}
