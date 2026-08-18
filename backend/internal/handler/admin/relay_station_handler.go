@@ -48,10 +48,10 @@ type updateRelayBindingsRequest struct {
 }
 
 type updateRelayAccountRequest struct {
-	GroupID	int64 `json:"group_id" binding:"required"`
-	SourceGroup	string `json:"source_group"`
-	Enabled	*bool `json:"enabled"`
-	Priority	*int `json:"priority"`
+	GroupID     int64  `json:"group_id" binding:"required"`
+	SourceGroup string `json:"source_group"`
+	Enabled     *bool  `json:"enabled"`
+	Priority    *int   `json:"priority"`
 }
 
 // List handles GET /api/v1/admin/relay-stations.
