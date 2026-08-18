@@ -38,7 +38,7 @@ var (
 type RelayStationType string
 
 const (
-	managedAIHubRouterURL = "http://127.0.0.1:8787"
+	managedAIHubRouterURL     = "http://127.0.0.1:8787"
 	managedAIHubUIPasswordEnv = "AIHUB_AUTO_UI_PASSWORD"
 	managedAIHubProxyTokenEnv = "AIHUB_AUTO_PROXY_TOKEN"
 
@@ -71,15 +71,15 @@ type RelayPriceBand struct {
 
 // RelayStationSource binds one local group to an upstream station and source group.
 type RelayStationSource struct {
-	StationID   string          `json:"station_id"`
-	Enabled     bool            `json:"enabled"`
-	SourceGroup string          `json:"source_group,omitempty"`
-	Priority    int             `json:"priority"`
-	Delta       float64         `json:"delta"`
-	MaxRate     *float64        `json:"max_rate,omitempty"`
-	Mode         string          `json:"mode,omitempty"`
-	AccountPools []string        `json:"account_pools,omitempty"`
-	AdjustRate   *bool           `json:"adjust_rate,omitempty"`
+	StationID    string   `json:"station_id"`
+	Enabled      bool     `json:"enabled"`
+	SourceGroup  string   `json:"source_group,omitempty"`
+	Priority     int      `json:"priority"`
+	Delta        float64  `json:"delta"`
+	MaxRate      *float64 `json:"max_rate,omitempty"`
+	Mode         string   `json:"mode,omitempty"`
+	AccountPools []string `json:"account_pools,omitempty"`
+	AdjustRate   *bool    `json:"adjust_rate,omitempty"`
 }
 
 // RelayGroupBinding is persisted as part of the relay configuration.
@@ -179,10 +179,10 @@ type relayStationConfig struct {
 
 // RelayStationRate is the raw station rate before the binding delta is applied.
 type RelayStationRate struct {
-	Rate           *float64 `json:"rate"`
-	Status         string   `json:"status"`
-	SupportedModels []string `json:"supported_models,omitempty"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	Rate            *float64  `json:"rate"`
+	Status          string    `json:"status"`
+	SupportedModels []string  `json:"supported_models,omitempty"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 type relayRateCache struct {
@@ -313,15 +313,15 @@ type RelayStationService struct {
 
 func NewRelayStationService(settingRepo SettingRepository, groupRepo GroupRepository, accountRepo AccountRepository, usage *UsageService, cfg *config.Config) *RelayStationService {
 	return &RelayStationService{
-		settingRepo: settingRepo,
-		groupRepo:   groupRepo,
-		accountRepo: accountRepo,
-		usage:       usage,
-		cfg:         cfg,
-		routes:             make(map[string]relayRouteCacheEntry),
-		sessions:           make(map[string]*relayStationSession),
+		settingRepo:         settingRepo,
+		groupRepo:           groupRepo,
+		accountRepo:         accountRepo,
+		usage:               usage,
+		cfg:                 cfg,
+		routes:              make(map[string]relayRouteCacheEntry),
+		sessions:            make(map[string]*relayStationSession),
 		activeAIHubStations: make(map[string]struct{}),
-		stopSignal:         make(chan struct{}),
+		stopSignal:          make(chan struct{}),
 	}
 }
 
@@ -389,15 +389,15 @@ func (s *RelayStationService) SyncNativeRelayAccounts(ctx context.Context) error
 				continue
 			}
 			account := &Account{
-				Name:          fmt.Sprintf("%s / %s", station.Name, source.SourceGroup),
-				Platform:      PlatformOpenAI,
-				Type:          "relay",
-				Credentials:   map[string]any{},
-				Extra:         map[string]any{relayAccountMarkerKey: true, relayAccountKeyKey: key, relayStationIDKey: station.ID, relayGroupIDKey: binding.GroupID, relaySourceGroupKey: source.SourceGroup},
-				Concurrency:   3,
-				Priority:      -source.Priority,
-				Status:        StatusActive,
-				Schedulable:   source.Enabled && station.Enabled,
+				Name:           fmt.Sprintf("%s / %s", station.Name, source.SourceGroup),
+				Platform:       PlatformOpenAI,
+				Type:           "relay",
+				Credentials:    map[string]any{},
+				Extra:          map[string]any{relayAccountMarkerKey: true, relayAccountKeyKey: key, relayStationIDKey: station.ID, relayGroupIDKey: binding.GroupID, relaySourceGroupKey: source.SourceGroup},
+				Concurrency:    3,
+				Priority:       -source.Priority,
+				Status:         StatusActive,
+				Schedulable:    source.Enabled && station.Enabled,
 				RateMultiplier: func() *float64 { value := 1.0; return &value }(),
 			}
 			if err := s.accountRepo.Create(ctx, account); err != nil {
@@ -580,14 +580,15 @@ func (s *RelayStationService) CreateStation(ctx context.Context, input RelayStat
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}
-	if station.Type == RelayStationTypeAIHub {
+	switch station.Type {
+	case RelayStationTypeAIHub:
 		if station.Username == "" || station.Password == "" {
 			return nil, infraerrors.BadRequest("RELAY_AIHUB_ACCOUNT_REQUIRED", "aihub station requires email and password")
 		}
 		if station.BaseURL == "" {
 			station.BaseURL = managedAIHubRouterURL
 		}
-	} else if station.Type == RelayStationTypeNewAPI || station.Type == RelayStationTypeSub2API {
+	case RelayStationTypeNewAPI, RelayStationTypeSub2API:
 		if station.ControlURL == "" {
 			station.ControlURL = station.BaseURL
 		}
@@ -991,11 +992,11 @@ func (s *RelayStationService) syncNativeRelayRates(ctx context.Context, snapshot
 			}
 			rate := rates.Rates[source.StationID][source.SourceGroup]
 			updates := map[string]any{
-				"relay_rate_updated_at":          rate.UpdatedAt.Format(time.RFC3339Nano),
-				"relay_effective_rate":            nil,
-				"relay_station_type":             string(station.Type),
-				"relay_model_capability_known":   station.Type == RelayStationTypeAIHub && rate.SupportedModels != nil,
-				"relay_supported_models":         rate.SupportedModels,
+				"relay_rate_updated_at":        rate.UpdatedAt.Format(time.RFC3339Nano),
+				"relay_effective_rate":         nil,
+				"relay_station_type":           string(station.Type),
+				"relay_model_capability_known": station.Type == RelayStationTypeAIHub && rate.SupportedModels != nil,
+				"relay_supported_models":       rate.SupportedModels,
 			}
 			if effective, ok := relayEffectiveRate(rate, source); ok {
 				updates["relay_effective_rate"] = effective
@@ -1050,7 +1051,7 @@ func (s *RelayStationService) ListGroups(ctx context.Context, stationID string) 
 		if err != nil {
 			return nil, err
 		}
-		groups := make(map[string]float64)
+		var groups map[string]float64
 		var status int
 		switch station.Type {
 		case RelayStationTypeNewAPI:
@@ -1290,14 +1291,14 @@ func (s *RelayStationService) EstimateProfit(ctx context.Context, start, end tim
 				DownstreamRate: group.RateMultiplier,
 			}
 			if upstreamRate, ok := relayEffectiveRate(rate, source); ok {
-					revenue := stat.Cost * group.RateMultiplier
-					cost := stat.Cost * upstreamRate
-					profit := revenue - cost
-					estimate.UpstreamRate = &upstreamRate
-					estimate.EstimatedRevenue = &revenue
-					estimate.EstimatedCost = &cost
-					estimate.EstimatedProfit = &profit
-				}
+				revenue := stat.Cost * group.RateMultiplier
+				cost := stat.Cost * upstreamRate
+				profit := revenue - cost
+				estimate.UpstreamRate = &upstreamRate
+				estimate.EstimatedRevenue = &revenue
+				estimate.EstimatedCost = &cost
+				estimate.EstimatedProfit = &profit
+			}
 			result = append(result, estimate)
 		}
 	}
@@ -1790,13 +1791,6 @@ func cloneRelayBindings(source []RelayGroupBinding) []RelayGroupBinding {
 		result = append(result, clone)
 	}
 	return result
-}
-
-func cloneRelayPriceBand(source *RelayPriceBand) *RelayPriceBand {
-	if source == nil {
-		return nil
-	}
-	return &RelayPriceBand{Min: cloneFloat64(source.Min), Max: cloneFloat64(source.Max)}
 }
 
 func cloneRelayRates(source relayRateCache) relayRateCache {

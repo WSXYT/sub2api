@@ -159,18 +159,18 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		relayUpstreamModel = channelMapping.MappedModel
 	}
 	if h.tryRelayOpenAIForward(c, relayOpenAIForwardInput{
-		APIKey:             apiKey,
-		Subscription:       subscription,
-		Body:               relayBody,
-		OriginalModel:      reqModel,
-		UpstreamModel:      relayUpstreamModel,
-		Stream:             reqStream,
-		SessionHash:        sessionHash,
-		PricingAt:           pricingAt,
-		ChannelUsageFields:  clientRequestedUsageFields(c, channelMapping, reqModel, relayUpstreamModel),
-		RequiredCapability:  service.OpenAIEndpointCapabilityChatCompletions,
-		RequiredTransport:   service.OpenAIUpstreamTransportAny,
-		RequestPlatform:     requestPlatform,
+		APIKey:               apiKey,
+		Subscription:         subscription,
+		Body:                 relayBody,
+		OriginalModel:        reqModel,
+		UpstreamModel:        relayUpstreamModel,
+		Stream:               reqStream,
+		SessionHash:          sessionHash,
+		PricingAt:            pricingAt,
+		ChannelUsageFields:   clientRequestedUsageFields(c, channelMapping, reqModel, relayUpstreamModel),
+		RequiredCapability:   service.OpenAIEndpointCapabilityChatCompletions,
+		RequiredTransport:    service.OpenAIUpstreamTransportAny,
+		RequestPlatform:      requestPlatform,
 		UseUpstreamTokenCost: true,
 	}, &streamStarted) {
 		return

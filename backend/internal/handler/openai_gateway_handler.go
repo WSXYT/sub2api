@@ -494,19 +494,19 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			relayUpstreamModel = channelMapping.MappedModel
 		}
 		if h.tryRelayOpenAIForward(c, relayOpenAIForwardInput{
-			APIKey:             apiKey,
-			Subscription:       subscription,
-			Body:               forwardBody,
-			OriginalModel:      reqModel,
-			UpstreamModel:      relayUpstreamModel,
-			Stream:             reqStream,
-			SessionHash:        sessionHash,
-			PricingAt:           pricingAt,
-			ChannelUsageFields:  clientRequestedUsageFields(c, channelMapping, reqModel, relayUpstreamModel),
-			RequiredCapability:  requiredCapability,
-			RequiredTransport:   service.OpenAIUpstreamTransportAny,
-			RequestPlatform:     requestPlatform,
-			RequireCompact:      requireCompact,
+			APIKey:               apiKey,
+			Subscription:         subscription,
+			Body:                 forwardBody,
+			OriginalModel:        reqModel,
+			UpstreamModel:        relayUpstreamModel,
+			Stream:               reqStream,
+			SessionHash:          sessionHash,
+			PricingAt:            pricingAt,
+			ChannelUsageFields:   clientRequestedUsageFields(c, channelMapping, reqModel, relayUpstreamModel),
+			RequiredCapability:   requiredCapability,
+			RequiredTransport:    service.OpenAIUpstreamTransportAny,
+			RequestPlatform:      requestPlatform,
+			RequireCompact:       requireCompact,
 			UseUpstreamTokenCost: !imageIntent,
 		}, &streamStarted) {
 			return

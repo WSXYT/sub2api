@@ -128,17 +128,17 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 		relayUpstreamModel = channelMapping.MappedModel
 	}
 	if h.tryRelayOpenAIForward(c, relayOpenAIForwardInput{
-		APIKey:             apiKey,
-		Subscription:       subscription,
-		Body:               relayBody,
-		OriginalModel:      reqModel,
-		UpstreamModel:      relayUpstreamModel,
-		SessionHash:        h.gatewayService.GenerateExplicitSessionHash(c, body),
-		PricingAt:           pricingAt,
-		ChannelUsageFields:  clientRequestedUsageFields(c, channelMapping, reqModel, relayUpstreamModel),
-		RequiredCapability:  service.OpenAIEndpointCapabilityEmbeddings,
-		RequiredTransport:   service.OpenAIUpstreamTransportHTTPSSE,
-		RequestPlatform:     service.PlatformOpenAI,
+		APIKey:               apiKey,
+		Subscription:         subscription,
+		Body:                 relayBody,
+		OriginalModel:        reqModel,
+		UpstreamModel:        relayUpstreamModel,
+		SessionHash:          h.gatewayService.GenerateExplicitSessionHash(c, body),
+		PricingAt:            pricingAt,
+		ChannelUsageFields:   clientRequestedUsageFields(c, channelMapping, reqModel, relayUpstreamModel),
+		RequiredCapability:   service.OpenAIEndpointCapabilityEmbeddings,
+		RequiredTransport:    service.OpenAIUpstreamTransportHTTPSSE,
+		RequestPlatform:      service.PlatformOpenAI,
 		UseUpstreamTokenCost: true,
 	}, &streamStarted) {
 		return

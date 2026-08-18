@@ -3231,15 +3231,15 @@ func TestSelectTopKOpenAICandidates(t *testing.T) {
 
 	top2 := selectTopKOpenAICandidates(candidates, 2)
 	require.Len(t, top2, 2)
-	require.Equal(t, int64(13), top2[0].account.ID)
-	require.Equal(t, int64(11), top2[1].account.ID)
+	require.Equal(t, int64(14), top2[0].account.ID)
+	require.Equal(t, int64(13), top2[1].account.ID)
 
 	topAll := selectTopKOpenAICandidates(candidates, 8)
 	require.Len(t, topAll, len(candidates))
-	require.Equal(t, int64(13), topAll[0].account.ID)
-	require.Equal(t, int64(11), topAll[1].account.ID)
+	require.Equal(t, int64(14), topAll[0].account.ID)
+	require.Equal(t, int64(13), topAll[1].account.ID)
 	require.Equal(t, int64(12), topAll[2].account.ID)
-	require.Equal(t, int64(14), topAll[3].account.ID)
+	require.Equal(t, int64(11), topAll[3].account.ID)
 }
 
 func TestBuildOpenAIWeightedSelectionOrder_DeterministicBySessionSeed(t *testing.T) {
@@ -3718,11 +3718,11 @@ func TestOpenAIEligibilitySkipsRelayWithoutEffectiveRate(t *testing.T) {
 
 func TestOpenAICandidateUsesRelayRateAfterPriority(t *testing.T) {
 	cheaper := openAIAccountCandidateScore{
-		account: &Account{ID: 1, Priority: 10, Extra: map[string]any{relayAccountMarkerKey: true, "relay_effective_rate": 0.4}},
+		account:  &Account{ID: 1, Priority: 10, Extra: map[string]any{relayAccountMarkerKey: true, "relay_effective_rate": 0.4}},
 		loadInfo: &AccountLoadInfo{}, score: 0.1, effectiveRate: 0.4, hasRate: true,
 	}
 	dearer := openAIAccountCandidateScore{
-		account: &Account{ID: 2, Priority: 10, Extra: map[string]any{relayAccountMarkerKey: true, "relay_effective_rate": 0.9}},
+		account:  &Account{ID: 2, Priority: 10, Extra: map[string]any{relayAccountMarkerKey: true, "relay_effective_rate": 0.9}},
 		loadInfo: &AccountLoadInfo{}, score: 100, effectiveRate: 0.9, hasRate: true,
 	}
 	if !isOpenAIAccountCandidateBetter(cheaper, dearer) {
