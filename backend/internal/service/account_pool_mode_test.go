@@ -96,6 +96,19 @@ func TestGetPoolModeRetryCount(t *testing.T) {
 			expected: maxPoolModeRetryCount,
 		},
 		{
+			name: "relay_uses_its_configured_retry_count",
+			account: &Account{
+				Type:     "relay",
+				Platform: PlatformOpenAI,
+				Extra:    map[string]any{relayAccountMarkerKey: true},
+				Credentials: map[string]any{
+					"pool_mode":             true,
+					"pool_mode_retry_count": 5,
+				},
+			},
+			expected: 5,
+		},
+		{
 			name: "invalid_value_falls_back_to_default",
 			account: &Account{
 				Type:     AccountTypeAPIKey,

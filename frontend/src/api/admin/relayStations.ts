@@ -64,6 +64,7 @@ export interface RelayStationSource {
 	delta: number;
 	max_rate?: number | null;
 	mode?: string;
+	account_pools?: Array<"plus" | "pro" | "team">;
 	price_band?: RelayPriceBand;
 }
 
@@ -124,6 +125,7 @@ interface StationMutationResult {
 interface BindingMutationResult {
 	bindings: RelayGroupBinding[];
 	aihub_synced: boolean;
+	aihub_sync_error?: string;
 }
 
 const secretFields = [
@@ -146,7 +148,10 @@ export function effectiveRelayRate(
 		return null;
 	}
 	if (maxRate != null && rate.rate > maxRate) return null;
-	const value = Math.min(rate.rate + Number(delta), maxRate ?? Number.POSITIVE_INFINITY);
+	const value = Math.min(
+		rate.rate + Number(delta),
+		maxRate ?? Number.POSITIVE_INFINITY,
+	);
 	return Number.isFinite(value) && value >= 0 ? value : null;
 }
 
@@ -271,10 +276,12 @@ export async function listRates(
 export async function refreshRates(): Promise<{
 	rates: RelayRate[];
 	refreshed: boolean;
+	error?: string;
 }> {
 	const { data } = await apiClient.post<{
 		rates: RelayRate[];
 		refreshed: boolean;
+		error?: string;
 	}>("/admin/relay-stations/rates/refresh");
 	return data;
 }

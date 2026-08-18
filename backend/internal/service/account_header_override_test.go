@@ -42,6 +42,9 @@ func TestIsHeaderOverrideEligible(t *testing.T) {
 		})
 	}
 
+	relay := &Account{Platform: PlatformOpenAI, Type: "relay", Extra: map[string]any{relayAccountMarkerKey: true}}
+	require.True(t, relay.IsHeaderOverrideEligible())
+
 	var nilAccount *Account
 	require.False(t, nilAccount.IsHeaderOverrideEligible())
 	require.False(t, nilAccount.IsHeaderOverrideEnabled())

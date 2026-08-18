@@ -314,7 +314,7 @@ func (s *RelayStationService) aiHubConfigForStation(stationID string) (relayAIHu
 	for _, binding := range s.snapshotConfig().Bindings {
 		for _, source := range binding.Sources {
 			if source.StationID == stationID && source.Enabled {
-				return relayAIHubConfig{Mode: source.Mode, PriceBand: cloneRelayPriceBand(source.PriceBand)}, true
+				return relayAIHubConfig{Mode: source.Mode, AccountPoolPlans: append([]string{}, source.AccountPools...), PriceBand: cloneRelayPriceBand(source.PriceBand)}, true
 			}
 		}
 	}
@@ -626,8 +626,9 @@ func (s *RelayStationService) SyncAIHubConfig(ctx context.Context) error {
 }
 
 type relayAIHubConfig struct {
-	Mode      string          `json:"mode,omitempty"`
-	PriceBand *RelayPriceBand `json:"priceBand,omitempty"`
+	Mode             string          `json:"mode,omitempty"`
+	AccountPoolPlans []string        `json:"accountPoolPlans"`
+	PriceBand        *RelayPriceBand `json:"priceBand,omitempty"`
 }
 
 func (s *RelayStationService) postAIHubConfig(ctx context.Context, station relayStation, policy relayAIHubConfig) error {

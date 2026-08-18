@@ -117,6 +117,29 @@ func TestRelayAccountUsesUpstreamModelCapabilitySnapshot(t *testing.T) {
 	}
 }
 
+func TestRelayAccountRequiresMappingAndMappedCapability(t *testing.T) {
+	account := &Account{
+		Credentials: map[string]any{"model_mapping": map[string]any{
+			"public-gpt":    "gpt-5",
+			"public-claude": "claude-sonnet-4",
+		}},
+		Extra: map[string]any{
+			relayAccountMarkerKey:          true,
+			"relay_model_capability_known": true,
+			"relay_supported_models":      []any{"gpt-5"},
+		},
+	}
+	if !account.IsModelSupported("public-gpt") {
+		t.Fatal("relay account rejected a mapped upstream capability")
+	}
+	if account.IsModelSupported("gpt-5") {
+		t.Fatal("relay account accepted a model excluded by its mapping")
+	}
+	if account.IsModelSupported("public-claude") {
+		t.Fatal("relay account accepted a mapped model outside the upstream capability snapshot")
+	}
+}
+
 func TestRelayEffectiveRateHonorsMaximum(t *testing.T) {
 	first := 0.09
 	second := 0.12
@@ -221,7 +244,7 @@ func TestSyncAIHubConfigPostsNativePolicy(t *testing.T) {
 				GroupID: 1,
 				Sources: []RelayStationSource{{
 					StationID: "aihub", Enabled: true, SourceGroup: "local-group", Mode: "economy",
-					PriceBand: &RelayPriceBand{Min: &min, Max: &max},
+					AccountPools: []string{"plus", "team"}, PriceBand: &RelayPriceBand{Min: &min, Max: &max},
 				}},
 			}},
 		},
@@ -229,8 +252,19 @@ func TestSyncAIHubConfigPostsNativePolicy(t *testing.T) {
 	if err := service.SyncAIHubConfig(context.Background()); err != nil {
 		t.Fatalf("SyncAIHubConfig: %v", err)
 	}
-	if received.Mode != "economy" || received.PriceBand == nil || received.PriceBand.Min == nil || received.PriceBand.Max == nil || *received.PriceBand.Min != min || *received.PriceBand.Max != max {
-		t.Fatalf("received policy = %#v, want economy %.1f-%.1f", received, min, max)
+	if received.Mode != "economy" || !sameRelayStringSlice(received.AccountPoolPlans, []string{"plus", "team"}) || received.PriceBand == nil || received.PriceBand.Min == nil || received.PriceBand.Max == nil || *received.PriceBand.Min != min || *received.PriceBand.Max != max {
+		t.Fatalf("received policy = %#v, want economy plus+team %.1f-%.1f", received, min, max)
+	}
+}
+
+func TestAIHubConfigForStationUsesEmptyPoolListForNoFilter(t *testing.T) {
+	service := &RelayStationService{config: relayStationConfig{Bindings: []RelayGroupBinding{{
+		GroupID: 1,
+		Sources: []RelayStationSource{{StationID: "aihub", Enabled: true}},
+	}}}}
+	policy, ok := service.aiHubConfigForStation("aihub")
+	if !ok || policy.AccountPoolPlans == nil || len(policy.AccountPoolPlans) != 0 {
+		t.Fatalf("empty pool policy = %#v/%v, want a non-nil empty list", policy, ok)
 	}
 }
 

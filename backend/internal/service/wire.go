@@ -229,6 +229,7 @@ func ProvideAccountTestService(
 	httpUpstream HTTPUpstream,
 	cfg *config.Config,
 	tlsFPProfileService *TLSFingerprintProfileService,
+	relayStationService *RelayStationService,
 	openAIGatewayService *OpenAIGatewayService,
 	settingService *SettingService,
 ) *AccountTestService {
@@ -241,6 +242,7 @@ func ProvideAccountTestService(
 		httpUpstream,
 		cfg,
 		tlsFPProfileService,
+		relayStationService,
 	)
 	service.agentIdentityWS = openAIGatewayService
 	service.SetSettingService(settingService)

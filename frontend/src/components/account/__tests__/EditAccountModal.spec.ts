@@ -166,6 +166,27 @@ function buildAccount() {
   } as any
 }
 
+function buildRelayAccount() {
+  const account = buildAccount()
+  return {
+    ...account,
+    id: 6,
+    name: 'sub2api Relay',
+    type: 'relay',
+    credentials: {
+      model_mapping: {
+        'public-gpt': 'gpt-5'
+      },
+      pool_mode: true,
+      pool_mode_retry_count: 5,
+      pool_mode_retry_status_codes: [401, 429]
+    },
+    extra: {
+      relay_account: true
+    }
+  } as any
+}
+
 function buildOpenAISparkShadowAccount() {
   const account = buildAccount()
   return {
@@ -341,6 +362,31 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.model_mapping).toEqual({
       'gpt-5.2': 'gpt-5.2'
     })
+  })
+
+  it('edits relay model restrictions and pool retries without station credentials', async () => {
+    const account = buildRelayAccount()
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    expect(wrapper.find('input[placeholder="https://api.openai.com"]').exists()).toBe(false)
+    expect((wrapper.get('[data-testid="relay-pool-mode-retry-count"]').element as HTMLInputElement).value).toBe('5')
+
+    await wrapper.get('[data-testid="relay-pool-mode-retry-count"]').setValue('4')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).toMatchObject({
+      model_mapping: { 'public-gpt': 'gpt-5' },
+      pool_mode: true,
+      pool_mode_retry_count: 4,
+      pool_mode_retry_status_codes: [401, 429]
+    })
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).not.toHaveProperty('api_key')
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).not.toHaveProperty('base_url')
   })
 
   it('preserves model mappings when editing the whitelist', async () => {

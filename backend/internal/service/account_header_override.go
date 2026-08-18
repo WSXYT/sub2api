@@ -70,15 +70,15 @@ func isHeaderOverrideBlockedName(lowerName string) bool {
 }
 
 // IsHeaderOverrideEligible 报告账号类型是否支持请求头覆写。
-// Anthropic / OpenAI 仅开放 api_key 账号；Grok 额外开放 oauth 账号——
-// 订阅流量改发自定义转发地址时，通常需要补充中间层要求的准入头。
+// Anthropic / OpenAI 仅开放 api_key 账号；OpenAI Relay 与 Grok 额外开放其
+// 可转发的账号类型，供中转上游补充所需准入头。
 func (a *Account) IsHeaderOverrideEligible() bool {
 	if a == nil {
 		return false
 	}
 	switch a.Platform {
 	case PlatformAnthropic, PlatformOpenAI:
-		return a.Type == AccountTypeAPIKey
+		return a.Type == AccountTypeAPIKey || (a.Platform == PlatformOpenAI && a.IsRelay())
 	case PlatformGrok:
 		return a.Type == AccountTypeAPIKey || a.Type == AccountTypeOAuth
 	default:

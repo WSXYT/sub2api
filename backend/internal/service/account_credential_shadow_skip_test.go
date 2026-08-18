@@ -68,6 +68,23 @@ func TestAccountTestServiceSkipsShadow(t *testing.T) {
 	require.Contains(t, err.Error(), "resolve spark shadow parent")
 }
 
+func TestAccountTestServiceRoutesRelayAccountBeforeAccountTypeValidation(t *testing.T) {
+	relay := &Account{
+		ID:       201,
+		Platform: PlatformOpenAI,
+		Type:     "relay",
+		Extra: map[string]any{
+			relayAccountMarkerKey: true,
+			relayGroupIDKey:       int64(1),
+		},
+	}
+	svc := &AccountTestService{accountRepo: &shadowSkipTestRepo{account: relay}}
+	err := svc.TestAccountConnection(newShadowTestGinCtx(), relay.ID, "gpt-5", "", "")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Relay station service is unavailable")
+	require.NotContains(t, err.Error(), "Unsupported account type")
+}
+
 // --- 3. EnsureOpenAIPrivacy 守卫 ---
 
 // TestEnsureOpenAIPrivacySkipsShadow 验证影子账号跳过隐私设置（不调用 privacyClientFactory）。

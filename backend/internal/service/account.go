@@ -903,7 +903,14 @@ func relayAccountSupportsModel(account *Account, requestedModel string) bool {
 // 未知/自定义别名仍保持允许（兼容渠道级映射），见 isOpenAIOAuthServableModel。
 func (a *Account) IsModelSupported(requestedModel string) bool {
 	if a.IsRelay() {
-		return relayAccountSupportsModel(a, requestedModel)
+		mapping := a.GetModelMapping()
+		if len(mapping) > 0 && !mappingSupportsRequestedModel(mapping, requestedModel) {
+			normalized := normalizeRequestedModelForLookup(a.Platform, requestedModel)
+			if normalized == requestedModel || !mappingSupportsRequestedModel(mapping, normalized) {
+				return false
+			}
+		}
+		return relayAccountSupportsModel(a, a.GetMappedModel(requestedModel))
 	}
 	// 透传模式仅替换认证、模型语义完全交由上游决定，因此放行所有模型。
 	// 该短路必须在 model_mapping 判定之前：账号从"白名单模式"切换到透传后，
@@ -1135,10 +1142,10 @@ func (a *Account) IsCustomErrorCodesEnabled() bool {
 	return false
 }
 
-// IsPoolMode 检查 API Key 账号是否启用池模式。
+// IsPoolMode 检查 API Key、Bedrock 或 Relay 账号是否启用池模式。
 // 池模式下，上游错误不标记本地账号状态，而是在同一账号上重试。
 func (a *Account) IsPoolMode() bool {
-	if !a.IsAPIKeyOrBedrock() || a.Credentials == nil {
+	if (!a.IsAPIKeyOrBedrock() && !a.IsRelay()) || a.Credentials == nil {
 		return false
 	}
 	if v, ok := a.Credentials["pool_mode"]; ok {

@@ -357,6 +357,29 @@
               />
             </template>
 
+            <template #cell-account_pools="{ row }">
+              <div v-if="stationById(row.station_id)?.type === 'aihub'" class="flex min-w-48 flex-wrap gap-2">
+                <label
+                  v-for="pool in accountPoolOptions"
+                  :key="pool.value"
+                  class="inline-flex items-center gap-1 text-xs text-gray-700 dark:text-gray-300"
+                >
+                  <input
+                    type="checkbox"
+                    class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                    :checked="sourceAccountPools(row).includes(pool.value)"
+                    :aria-label="`${bindingControlLabel('accountPools', row)}: ${pool.label}`"
+                    @change="toggleSourceAccountPool(row, pool.value)"
+                  />
+                  {{ pool.label }}
+                </label>
+                <span v-if="sourceAccountPools(row).length === 0" class="w-full text-[11px] text-gray-400">
+                  {{ t('admin.relayStations.binding.allPools') }}
+                </span>
+              </div>
+              <span v-else class="text-gray-400">-</span>
+            </template>
+
             <template #cell-mode="{ row }">
               <Select
                 v-if="stationById(row.station_id)?.type === 'aihub'"
@@ -816,6 +839,13 @@ const stationColumns = computed<Column[]>(() => [
   { key: 'actions', label: t('admin.relayStations.columns.actions') }
 ])
 
+type AIHubAccountPool = 'plus' | 'pro' | 'team'
+const accountPoolOptions: Array<{ value: AIHubAccountPool; label: string }> = [
+  { value: 'plus', label: 'Plus' },
+  { value: 'pro', label: 'Pro' },
+  { value: 'team', label: 'Team' }
+]
+
 const modeOptions = computed(() =>
   (['economy', 'balanced', 'speed'] as const).map((mode) => ({
     value: mode,
@@ -828,6 +858,7 @@ const bindingColumns = computed<Column[]>(() => [
   { key: 'priority', label: t('admin.relayStations.columns.priority') },
   { key: 'adjustment', label: t('admin.relayStations.columns.adjustment') },
   { key: 'group', label: t('admin.relayStations.columns.group') },
+  { key: 'account_pools', label: t('admin.relayStations.columns.accountPools') },
   { key: 'mode', label: t('admin.relayStations.columns.mode') },
   { key: 'price_band', label: t('admin.relayStations.columns.priceBand') },
   { key: 'enabled', label: t('admin.relayStations.columns.enabled') },
@@ -965,7 +996,7 @@ function rateStatusLabel(status?: RelayRateStatus): string {
 }
 
 function bindingControlLabel(
-  key: 'group' | 'mode' | 'priceBand' | 'priority' | 'adjustment' | 'enabled',
+  key: 'group' | 'accountPools' | 'mode' | 'priceBand' | 'priority' | 'adjustment' | 'enabled',
   source: RelayStationSource
 ): string {
   return `${t(`admin.relayStations.columns.${key}`)}: ${stationById(source.station_id)?.name || source.station_id}`
@@ -1054,6 +1085,19 @@ function groupOptionsFor(source: RelayStationSource): Array<{ value: string; lab
 
 function sourceMode(source: RelayStationSource): string {
   return source.mode === 'economy' || source.mode === 'speed' ? source.mode : 'balanced'
+}
+
+function sourceAccountPools(source: RelayStationSource): AIHubAccountPool[] {
+  const values = new Set(source.account_pools || [])
+  return accountPoolOptions.map((option) => option.value).filter((value) => values.has(value))
+}
+
+function toggleSourceAccountPool(source: RelayStationSource, pool: AIHubAccountPool): void {
+  const selected = new Set(sourceAccountPools(source))
+  if (selected.has(pool)) selected.delete(pool)
+  else selected.add(pool)
+  source.account_pools = accountPoolOptions.map((option) => option.value).filter((value) => selected.has(value))
+  bindingsDirty.value = true
 }
 
 function priceBandValue(source: RelayStationSource, key: keyof RelayPriceBand): number | string {
@@ -1301,7 +1345,7 @@ function addSource(): void {
     source_group: sourceGroup,
     priority: 0,
     delta: 0,
-    ...(station.type === 'aihub' ? { mode: 'balanced', price_band: {} } : {})
+    ...(station.type === 'aihub' ? { mode: 'balanced', account_pools: [], price_band: {} } : {})
   })
   stationToAdd.value = null
   sourceGroupToAdd.value = null
@@ -1357,6 +1401,7 @@ function normalizedBindings(): RelayGroupBinding[] | null {
           delta: Number(source.delta ?? 0),
           max_rate: source.max_rate == null ? undefined : Number(source.max_rate),
           mode: station?.type === 'aihub' ? sourceMode(source) : undefined,
+          account_pools: station?.type === 'aihub' ? sourceAccountPools(source) : undefined,
           price_band: priceBand && (priceBand.min !== undefined || priceBand.max !== undefined)
             ? priceBand
             : undefined
@@ -1403,7 +1448,13 @@ async function saveBindings(): Promise<void> {
     const result = await adminAPI.relayStations.updateBindings(payload)
     bindings.value = result.bindings
     bindingsDirty.value = false
-    appStore.showSuccess(t('admin.relayStations.bindingsSaved'))
+    if (result.aihub_synced) {
+      appStore.showSuccess(t('admin.relayStations.bindingsSaved'))
+    } else {
+      appStore.showWarning(t('admin.relayStations.bindingsSavedWithSyncError', {
+        reason: result.aihub_sync_error || t('admin.relayStations.ratesRefreshFailed')
+      }))
+    }
   } catch (error) {
     appStore.showError(errorMessage(error, t('admin.relayStations.bindingsSaveFailed')))
     savingBindings.value = false
@@ -1418,7 +1469,11 @@ async function refreshAllRates(showSuccess = true): Promise<void> {
   try {
     const result = await adminAPI.relayStations.refreshRates()
     rates.value = result.rates
-    if (!result.refreshed) appStore.showWarning(t('admin.relayStations.ratesRefreshPartial'))
+    if (!result.refreshed) {
+      appStore.showWarning(result.error
+        ? t('admin.relayStations.ratesRefreshPartialWithReason', { reason: result.error })
+        : t('admin.relayStations.ratesRefreshPartial'))
+    }
     else if (showSuccess) appStore.showSuccess(t('admin.relayStations.ratesRefreshSuccess'))
   } catch (error) {
     appStore.showError(errorMessage(error, t('admin.relayStations.ratesRefreshFailed')))

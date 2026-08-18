@@ -38,7 +38,7 @@ export interface HeaderOverrideRow {
 /** 请求头覆写资格（与后端 IsHeaderOverrideEligible 保持一致） */
 export function isHeaderOverrideCapable(platform: string, type: string): boolean {
   if (platform === 'anthropic' || platform === 'openai') {
-    return type === 'apikey'
+    return type === 'apikey' || (platform === 'openai' && type === 'relay')
   }
   if (platform === 'grok') {
     return type === 'apikey' || type === 'oauth'

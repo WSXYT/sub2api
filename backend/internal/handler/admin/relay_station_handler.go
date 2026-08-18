@@ -197,10 +197,12 @@ func (h *RelayStationHandler) UpdateBindings(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	response.Success(c, gin.H{
-		"bindings":     bindings,
-		"aihub_synced": h.relayService.SyncAIHubConfig(c.Request.Context()) == nil,
-	})
+	syncErr := h.relayService.SyncAIHubConfig(c.Request.Context())
+	payload := gin.H{"bindings": bindings, "aihub_synced": syncErr == nil}
+	if syncErr != nil {
+		payload["aihub_sync_error"] = syncErr.Error()
+	}
+	response.Success(c, payload)
 }
 
 // ListGroups handles GET /api/v1/admin/relay-stations/:id/groups.
@@ -240,7 +242,11 @@ func (h *RelayStationHandler) RefreshRates(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	response.Success(c, gin.H{"rates": rates, "refreshed": refreshErr == nil})
+	payload := gin.H{"rates": rates, "refreshed": refreshErr == nil}
+	if refreshErr != nil {
+		payload["error"] = refreshErr.Error()
+	}
+	response.Success(c, payload)
 }
 
 // SyncAIHub handles POST /api/v1/admin/relay-stations/sync.

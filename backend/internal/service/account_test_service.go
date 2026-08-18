@@ -146,6 +146,7 @@ type AccountTestService struct {
 	cfg                       *config.Config
 	settingService            *SettingService
 	tlsFPProfileService       *TLSFingerprintProfileService
+	relayStationService       *RelayStationService
 	agentIdentityTaskMu       sync.Mutex
 	agentIdentityWS           agentIdentityWSConnectionInvalidator
 	// grokWSDialer is optional; realtime account tests use the default OpenAI-style
@@ -169,6 +170,7 @@ func NewAccountTestService(
 	httpUpstream HTTPUpstream,
 	cfg *config.Config,
 	tlsFPProfileService *TLSFingerprintProfileService,
+	relayStationService *RelayStationService,
 ) *AccountTestService {
 	return &AccountTestService{
 		accountRepo:               accountRepo,
@@ -179,6 +181,7 @@ func NewAccountTestService(
 		httpUpstream:              httpUpstream,
 		cfg:                       cfg,
 		tlsFPProfileService:       tlsFPProfileService,
+		relayStationService:       relayStationService,
 	}
 }
 
@@ -282,6 +285,12 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 		s.sendEvent(c, TestEvent{Type: "content", Text: "Synthetic Anthropic OAuth account is healthy and interactive."})
 		s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
 		return nil
+	}
+
+	// Relay accounts use their configured station transport rather than a
+	// credential type branch, so this probes the same path as live traffic.
+	if account.IsRelay() {
+		return s.testRelayAccountConnection(c, account, modelID, prompt)
 	}
 
 	// Route to platform-specific test method
@@ -1912,6 +1921,54 @@ func minimalSilentWAV() []byte {
 	binary.LittleEndian.PutUint32(buf[40:], uint32(dataSize))
 	// samples already zero (silence)
 	return buf
+}
+
+func (s *AccountTestService) testRelayAccountConnection(c *gin.Context, account *Account, modelID string, prompt string) error {
+	if s.relayStationService == nil {
+		return s.sendErrorAndEnd(c, "Relay station service is unavailable")
+	}
+	groupID := account.RelayGroupID()
+	if groupID <= 0 {
+		return s.sendErrorAndEnd(c, "Relay account has no group binding")
+	}
+	testModelID := strings.TrimSpace(modelID)
+	if testModelID == "" {
+		testModelID = openai.DefaultTestModel
+	}
+	if !account.IsModelSupported(testModelID) {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Model %q is not supported by this relay account", testModelID))
+	}
+	route, err := s.relayStationService.ResolveRouteForAccount(c.Request.Context(), account, groupID)
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Relay route is unavailable: %s", err.Error()))
+	}
+
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
+	c.Writer.Flush()
+
+	payload := createOpenAIChatCompletionsTestPayload(account.GetMappedModel(testModelID), prompt)
+	payloadBytes, _ := json.Marshal(payload)
+	s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
+	s.sendEvent(c, TestEvent{Type: "status", Text: "正在通过中转站测试连接"})
+	inbound, err := http.NewRequestWithContext(c.Request.Context(), http.MethodPost, "http://relay.invalid/v1/chat/completions", bytes.NewReader(payloadBytes))
+	if err != nil {
+		return s.sendErrorAndEnd(c, "Failed to create relay test request")
+	}
+	inbound.Header.Set("Content-Type", "application/json")
+	inbound.Header.Set("Accept", "text/event-stream")
+	resp, err := s.relayStationService.ForwardAccount(c.Request.Context(), account, route, inbound)
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Relay request failed: %s", err.Error()))
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Relay returned %d: %s", resp.StatusCode, string(body)))
+	}
+	return s.processOpenAIChatCompletionsStream(c, resp.Body)
 }
 
 // testOpenAIChatCompletionsConnection tests an OpenAI-compatible APIKey account

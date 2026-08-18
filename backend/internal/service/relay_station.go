@@ -74,8 +74,9 @@ type RelayStationSource struct {
 	Priority    int             `json:"priority"`
 	Delta       float64         `json:"delta"`
 	MaxRate     *float64        `json:"max_rate,omitempty"`
-	Mode        string          `json:"mode,omitempty"`
-	PriceBand   *RelayPriceBand `json:"price_band,omitempty"`
+	Mode         string          `json:"mode,omitempty"`
+	AccountPools []string        `json:"account_pools,omitempty"`
+	PriceBand    *RelayPriceBand `json:"price_band,omitempty"`
 }
 
 // RelayGroupBinding is persisted as part of the relay configuration.
@@ -921,7 +922,7 @@ func (s *RelayStationService) refreshRates(ctx context.Context, onlyStationID st
 		}
 		rates, err := s.fetchStationRates(ctx, station, sourceGroups)
 		if err != nil {
-			pollErrors = append(pollErrors, err)
+			pollErrors = append(pollErrors, fmt.Errorf("%s: %w", station.Name, err))
 			rates = make(map[string]RelayStationRate, len(sourceGroups))
 		}
 		for sourceGroup := range sourceGroups {
@@ -1433,6 +1434,11 @@ func (s *RelayStationService) validateConfig(candidate *relayStationConfig) erro
 			source := &binding.Sources[sourceIndex]
 			source.StationID = strings.TrimSpace(source.StationID)
 			source.Mode = strings.TrimSpace(source.Mode)
+			var poolErr error
+			source.AccountPools, poolErr = normalizeRelayAccountPools(source.AccountPools)
+			if poolErr != nil {
+				return poolErr
+			}
 			if source.StationID == "" {
 				return infraerrors.BadRequest("RELAY_SOURCE_INVALID", "relay source station_id is required")
 			}
@@ -1469,7 +1475,7 @@ func (s *RelayStationService) validateConfig(candidate *relayStationConfig) erro
 				return err
 			}
 			if station.Type == RelayStationTypeAIHub && source.Enabled {
-				policy := relayAIHubConfig{Mode: source.Mode, PriceBand: cloneRelayPriceBand(source.PriceBand)}
+				policy := relayAIHubConfig{Mode: source.Mode, AccountPoolPlans: append([]string(nil), source.AccountPools...), PriceBand: cloneRelayPriceBand(source.PriceBand)}
 				if existing, found := aihubPolicies[source.StationID]; found && !sameRelayAIHubConfig(existing, policy) {
 					return infraerrors.BadRequest("RELAY_AIHUB_POLICY_CONFLICT", "all bindings for an aihub account must use the same aihub-auto policy")
 				}
@@ -1544,11 +1550,45 @@ func (s *RelayStationService) applyAIHubConnectionDefaults(station *relayStation
 }
 
 func sameRelayAIHubConfig(left, right relayAIHubConfig) bool {
-	if left.Mode != right.Mode {
+	if left.Mode != right.Mode || !sameRelayStringSlice(left.AccountPoolPlans, right.AccountPoolPlans) {
 		return false
 	}
 	return sameRelayFloat64(left.PriceBand, right.PriceBand, func(band *RelayPriceBand) *float64 { return band.Min }) &&
 		sameRelayFloat64(left.PriceBand, right.PriceBand, func(band *RelayPriceBand) *float64 { return band.Max })
+}
+
+func normalizeRelayAccountPools(values []string) ([]string, error) {
+	allowed := map[string]struct{}{"plus": {}, "pro": {}, "team": {}}
+	selected := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value == "" {
+			continue
+		}
+		if _, ok := allowed[value]; !ok {
+			return nil, infraerrors.BadRequest("RELAY_ACCOUNT_POOL_INVALID", "aihub account_pools may contain only plus, pro, or team")
+		}
+		selected[value] = struct{}{}
+	}
+	result := make([]string, 0, len(selected))
+	for _, value := range []string{"plus", "pro", "team"} {
+		if _, ok := selected[value]; ok {
+			result = append(result, value)
+		}
+	}
+	return result, nil
+}
+
+func sameRelayStringSlice(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func sameRelayFloat64(left, right *RelayPriceBand, value func(*RelayPriceBand) *float64) bool {
@@ -1732,6 +1772,7 @@ func cloneRelayBindings(source []RelayGroupBinding) []RelayGroupBinding {
 	for _, binding := range source {
 		clone := RelayGroupBinding{GroupID: binding.GroupID, Sources: make([]RelayStationSource, 0, len(binding.Sources))}
 		for _, item := range binding.Sources {
+			item.AccountPools = append([]string(nil), item.AccountPools...)
 			item.PriceBand = cloneRelayPriceBand(item.PriceBand)
 			clone.Sources = append(clone.Sources, item)
 		}
