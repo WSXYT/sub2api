@@ -836,14 +836,14 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAIAccountLoadPlan(
 			continue
 		}
 		allCandidates = append(allCandidates, openAIAccountCandidateScore{
-			account:        account,
-			loadInfo:       loadInfo,
-			loadKnown:      loadKnown,
-			errorRate:      errorRate,
-			ttft:           ttft,
-			hasTTFT:        hasTTFT,
-			effectiveRate:  effectiveRate,
-			hasRate:        hasRate,
+			account:       account,
+			loadInfo:      loadInfo,
+			loadKnown:     loadKnown,
+			errorRate:     errorRate,
+			ttft:          ttft,
+			hasTTFT:       hasTTFT,
+			effectiveRate: effectiveRate,
+			hasRate:       hasRate,
 		})
 	}
 
