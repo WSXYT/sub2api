@@ -682,6 +682,25 @@ func TestUsageLogRepositoryGetGroupStatsWithUsageFiltersAppliesRequestedModelFil
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestUsageLogRepositoryGetGroupStatsWithUsageFiltersExcludesAdminUsers(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &usageLogRepository{sql: db}
+
+	start := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(24 * time.Hour)
+	mock.ExpectQuery(`(?s)NOT EXISTS \(SELECT 1 FROM users u WHERE u.id = ul.user_id AND u.role = 'admin'\)`).
+		WithArgs(start, end).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"group_id", "group_name", "requests", "total_tokens",
+			"cost", "actual_cost", "account_cost",
+		}).AddRow(int64(1), "default", int64(1), int64(30), 0.1, 0.08, 0.07))
+
+	results, err := repo.GetGroupStatsWithUsageFilters(context.Background(), start, end, usagestats.UsageLogFilters{ExcludeAdmin: true})
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestUsageLogRepositoryGetStatsWithFiltersAlwaysReturnsAccountCost(t *testing.T) {
 	db, mock := newSQLMock(t)
 	repo := &usageLogRepository{sql: db}

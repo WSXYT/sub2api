@@ -11,6 +11,7 @@ vi.mock("@/api/client", () => ({ apiClient: { get, patch, put } }));
 import {
 	effectiveRelayRate,
 	listRelayAccounts,
+	relayProfitRange,
 	relayErrorReason,
 	updateRelayAccount,
 	updateBindings,
@@ -102,6 +103,13 @@ describe("admin relay stations API", () => {
 			effectiveRelayRate({ ...readyRate, rate: 0.12 }, 0.02, 0.1),
 		).toBeNull();
 		expect(effectiveRelayRate({ ...readyRate, rate: 0.09 }, 0.02, 0.1, false)).toBeCloseTo(0.09);
+	});
+
+	it("uses the next midnight as the exclusive profit end", () => {
+		expect(relayProfitRange("2026-08-01", "2026-08-31")).toEqual({
+			startAt: "2026-08-01T00:00:00Z",
+			endAt: "2026-09-01T00:00:00.000Z",
+		});
 	});
 
 	it("reads semantic backend error reasons", () => {

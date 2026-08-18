@@ -331,8 +331,9 @@ func TestTestStationProbesUnboundAIHub(t *testing.T) {
 	}
 }
 
-func TestResolveRoutePrefersRelayPriority(t *testing.T) {
+func TestResolveRouteKeepsUnadjustedSourceRouteable(t *testing.T) {
 	fastRate, preferredRate := 0.1, 0.2
+	adjustRate := false
 	service := &RelayStationService{
 		settingRepo: &fakeSettingRepo{},
 		loaded:      true,
@@ -343,7 +344,7 @@ func TestResolveRoutePrefersRelayPriority(t *testing.T) {
 			},
 			Bindings: []RelayGroupBinding{{GroupID: 1, Sources: []RelayStationSource{
 				{StationID: "low", SourceGroup: "default", Enabled: true, Priority: 0},
-				{StationID: "high", SourceGroup: "default", Enabled: true, Priority: 100},
+				{StationID: "high", SourceGroup: "default", Enabled: true, Priority: 100, Delta: 0.5, AdjustRate: &adjustRate},
 			}}},
 		},
 		rates: relayRateCache{Rates: map[string]map[string]RelayStationRate{
@@ -360,6 +361,9 @@ func TestResolveRoutePrefersRelayPriority(t *testing.T) {
 	}
 	if route.StationID() != "high" {
 		t.Fatalf("selected station = %q, want high-priority station", route.StationID())
+	}
+	if route.EffectiveRate() != preferredRate {
+		t.Fatalf("unadjusted route rate = %v, want raw rate %v", route.EffectiveRate(), preferredRate)
 	}
 }
 

@@ -718,6 +718,7 @@ import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
 import {
   effectiveRelayRate,
+  relayProfitRange,
   relayErrorReason,
   type RelayGroupBinding,
   type RelayProfitEstimate,
@@ -1449,8 +1450,7 @@ async function loadProfit(): Promise<void> {
   profitLoading.value = true
   profitUnavailable.value = false
   try {
-    const startAt = `${profitStartDate.value}T00:00:00Z`
-    const endAt = `${profitEndDate.value}T23:59:59Z`
+    const { startAt, endAt } = relayProfitRange(profitStartDate.value, profitEndDate.value)
     const result = await adminAPI.relayStations.getProfit(startAt, endAt)
     profitEstimates.value = result.estimates
   } catch (error) {

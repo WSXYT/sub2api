@@ -151,6 +151,15 @@ export function effectiveRelayRate(
 	return Number.isFinite(value) && value >= 0 ? value : null;
 }
 
+export function relayProfitRange(startDate: string, endDate: string): {
+	startAt: string;
+	endAt: string;
+} {
+	const endAt = new Date(`${endDate}T00:00:00.000Z`);
+	endAt.setUTCDate(endAt.getUTCDate() + 1);
+	return { startAt: `${startDate}T00:00:00Z`, endAt: endAt.toISOString() };
+}
+
 export function relayErrorReason(error: unknown): string | undefined {
 	if (!error || typeof error !== "object" || !("reason" in error))
 		return undefined;

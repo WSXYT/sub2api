@@ -39,6 +39,18 @@ func TestMigration222InvalidatesClosedBucketsWhenUsageLogsChange(t *testing.T) {
 	require.Contains(t, sql, "AFTER UPDATE OF created_at, group_id, actual_cost")
 }
 
+func TestMigration224UsesTheStoredRollupTimezone(t *testing.T) {
+	content, err := FS.ReadFile("224_group_usage_rollup_trigger_state_timezone.sql")
+	require.NoError(t, err)
+
+	sql := string(content)
+	require.Contains(t, sql, "COALESCE(NULLIF(timezone_name, ''), 'Asia/Shanghai')")
+	require.Contains(t, sql, "FOR UPDATE")
+	require.Contains(t, sql, "FOR KEY SHARE")
+	require.Contains(t, sql, "CREATE OR REPLACE FUNCTION invalidate_group_usage_rollup_state")
+	require.Contains(t, sql, "CREATE OR REPLACE FUNCTION invalidate_group_usage_rollup_state_after_insert")
+}
+
 func TestMigration223TracksConfiguredTimezone(t *testing.T) {
 	content, err := FS.ReadFile("223_group_usage_rollup_timezone.sql")
 	require.NoError(t, err)

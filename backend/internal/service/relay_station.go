@@ -1061,6 +1061,9 @@ func (s *RelayStationService) syncRelayGroupRateMultipliers(ctx context.Context,
 	now := time.Now()
 	for _, binding := range snapshot.Bindings {
 		for _, source := range binding.Sources {
+			if source.AdjustRate != nil && !*source.AdjustRate {
+				continue
+			}
 			station, found := stations[source.StationID]
 			if !found || !station.Enabled || !source.Enabled || (station.Type == RelayStationTypeAIHub && strings.TrimSpace(station.BaseURL) == "") {
 				continue
@@ -1334,7 +1337,7 @@ func (s *RelayStationService) EstimateProfit(ctx context.Context, start, end tim
 		return nil, infraerrors.BadRequest("RELAY_PROFIT_RANGE_INVALID", "start and end must form a valid time range")
 	}
 
-	stats, err := s.usage.GetGroupStatsWithFilters(ctx, start, end, usagestats.UsageLogFilters{})
+	stats, err := s.usage.GetGroupStatsWithFilters(ctx, start, end, usagestats.UsageLogFilters{ExcludeAdmin: true})
 	if err != nil {
 		return nil, err
 	}

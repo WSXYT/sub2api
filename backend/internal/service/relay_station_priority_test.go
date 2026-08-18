@@ -46,9 +46,10 @@ func TestRelayNativePriorityStaysPositiveAndReversesSourceOrder(t *testing.T) {
 	}
 }
 
-func TestSyncRelayGroupRateMultipliersUsesHighestEffectiveRate(t *testing.T) {
-	first, second, capped, disabled, stale, endpointless := 0.2, 0.25, 0.6, 0.9, 0.8, 0.95
+func TestSyncRelayGroupRateMultipliersUsesHighestEnabledCorrection(t *testing.T) {
+	first, second, capped, disabled, stale, endpointless, unadjusted := 0.2, 0.25, 0.6, 0.9, 0.8, 0.95, 0.9
 	maxRate := 0.5
+	adjustRate := false
 	now := time.Now()
 	repo := &relayGroupMultiplierRepo{groups: map[int64]*Group{
 		1: {ID: 1, RateMultiplier: 1},
@@ -67,6 +68,7 @@ func TestSyncRelayGroupRateMultipliersUsesHighestEffectiveRate(t *testing.T) {
 				{StationID: "one", SourceGroup: "second", Enabled: true, Delta: 0.2, MaxRate: &maxRate},
 				{StationID: "two", SourceGroup: "capped", Enabled: true, MaxRate: &maxRate},
 				{StationID: "two", SourceGroup: "stale", Enabled: true},
+				{StationID: "two", SourceGroup: "unadjusted", Enabled: true, Delta: 0.2, AdjustRate: &adjustRate},
 				{StationID: "aihub", SourceGroup: "default", Enabled: true},
 			}},
 			{GroupID: 2, Sources: []RelayStationSource{
@@ -81,8 +83,9 @@ func TestSyncRelayGroupRateMultipliersUsesHighestEffectiveRate(t *testing.T) {
 			"disabled": {Rate: &disabled, Status: RelayRateStatusReady, UpdatedAt: now},
 		},
 		"two": {
-			"capped": {Rate: &capped, Status: RelayRateStatusReady, UpdatedAt: now},
-			"stale":  {Rate: &stale, Status: RelayRateStatusReady, UpdatedAt: now.Add(-2 * relayStationRatePollInterval)},
+			"capped":     {Rate: &capped, Status: RelayRateStatusReady, UpdatedAt: now},
+			"stale":      {Rate: &stale, Status: RelayRateStatusReady, UpdatedAt: now.Add(-2 * relayStationRatePollInterval)},
+			"unadjusted": {Rate: &unadjusted, Status: RelayRateStatusReady, UpdatedAt: now},
 		},
 		"aihub": {
 			"default": {Rate: &endpointless, Status: RelayRateStatusReady, UpdatedAt: now},
@@ -93,7 +96,7 @@ func TestSyncRelayGroupRateMultipliersUsesHighestEffectiveRate(t *testing.T) {
 		t.Fatalf("sync group multipliers: %v", err)
 	}
 	if got := repo.groups[1].RateMultiplier; got != 0.45 {
-		t.Fatalf("group multiplier = %v, want highest effective rate 0.45", got)
+		t.Fatalf("group multiplier = %v, want highest enabled correction 0.45", got)
 	}
 	if got := repo.groups[2].RateMultiplier; got != 0.8 {
 		t.Fatalf("group without a routeable source changed to %v, want 0.8", got)
