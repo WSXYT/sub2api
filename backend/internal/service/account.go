@@ -165,15 +165,19 @@ func (a *Account) RelayGroupID() int64 {
 	if a == nil || a.Extra == nil {
 		return 0
 	}
-	return ParseExtraInt(a.Extra[relayGroupIDKey])
+	return int64(ParseExtraInt(a.Extra[relayGroupIDKey]))
 }
 
 func (a *Account) RelayEffectiveRate() (float64, bool) {
 	if a == nil || !a.IsRelay() || a.Extra == nil {
 		return 0, false
 	}
-	value, ok := parseExtraFloat64(a.Extra["relay_effective_rate"])
-	return value, ok && value >= 0
+	raw, exists := a.Extra["relay_effective_rate"]
+	if !exists || raw == nil {
+		return 0, false
+	}
+	value := parseExtraFloat64(raw)
+	return value, value >= 0
 }
 
 // IsSyntheticUITest reports whether the account belongs to an isolated UI load-test
