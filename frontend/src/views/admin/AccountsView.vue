@@ -284,9 +284,9 @@
               <span
                 v-if="getRelaySupportedModels(row) !== null"
                 class="max-w-[14rem] truncate pl-0.5 text-[11px] leading-4 text-gray-500 dark:text-gray-400"
-                :title="getRelaySupportedModels(row) || t('admin.accounts.relay.modelsUnknown')"
+                :title="getRelaySupportedModels(row) || t('admin.accounts.relay.allModels')"
               >
-                {{ getRelaySupportedModels(row) ? t('admin.accounts.relay.supportedModels', { models: getRelaySupportedModels(row) }) : t('admin.accounts.relay.modelsUnknown') }}
+                {{ getRelaySupportedModels(row) ? t('admin.accounts.relay.supportedModels', { models: getRelaySupportedModels(row) }) : t('admin.accounts.relay.allModels') }}
               </span>
             </div>
           </template>

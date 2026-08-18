@@ -319,12 +319,18 @@
             </template>
 
             <template #cell-adjustment="{ row }">
-              <div class="flex min-w-52 items-center gap-2">
+              <div class="flex min-w-64 items-center gap-2">
+                <Toggle
+                  :model-value="sourceAdjustmentEnabled(row)"
+                  :aria-label="`${bindingControlLabel('adjustment', row)}: ${t('admin.relayStations.binding.enableAdjustment')}`"
+                  @update:model-value="updateSourceAdjustment(row, $event)"
+                />
                 <input
                   :value="row.delta"
                   type="number"
                   step="0.0001"
                   class="input w-24"
+                  :disabled="!sourceAdjustmentEnabled(row)"
                   :aria-label="`${bindingControlLabel('adjustment', row)}: ${t('admin.relayStations.binding.adjustment')}`"
                   @input="updateSourceDelta(row, $event)"
                 />
@@ -391,32 +397,6 @@
               <span v-else class="text-gray-400">-</span>
             </template>
 
-            <template #cell-price_band="{ row }">
-              <div v-if="stationById(row.station_id)?.type === 'aihub'" class="flex min-w-56 items-center gap-2">
-                <input
-                  :value="priceBandValue(row, 'min')"
-                  type="number"
-                  min="0"
-                  step="0.0001"
-                  class="input w-24"
-                  :aria-label="`${bindingControlLabel('priceBand', row)}: ${t('admin.relayStations.binding.minimum')}`"
-                  :placeholder="t('admin.relayStations.binding.minimum')"
-                  @input="updatePriceBand(row, 'min', $event)"
-                />
-                <span class="text-gray-400">~</span>
-                <input
-                  :value="priceBandValue(row, 'max')"
-                  type="number"
-                  min="0"
-                  step="0.0001"
-                  class="input w-24"
-                  :aria-label="`${bindingControlLabel('priceBand', row)}: ${t('admin.relayStations.binding.maximum')}`"
-                  :placeholder="t('admin.relayStations.binding.maximum')"
-                  @input="updatePriceBand(row, 'max', $event)"
-                />
-              </div>
-              <span v-else class="text-gray-400">-</span>
-            </template>
 
             <template #cell-enabled="{ row }">
               <Toggle
@@ -442,7 +422,10 @@
                 <span class="font-mono font-semibold text-gray-900 dark:text-white">
                   {{ formatRate(sourceEffectiveRate(row)) }}
                 </span>
-                <span v-if="isLowestSource(row)" class="badge badge-success">
+                <span v-if="sourceAboveMaxRate(row)" class="badge badge-danger">
+                  {{ t('admin.relayStations.binding.maxRateExceeded') }}
+                </span>
+                <span v-else-if="isLowestSource(row)" class="badge badge-success">
                   {{ t('admin.relayStations.binding.lowest') }}
                 </span>
               </div>
@@ -737,7 +720,6 @@ import {
   effectiveRelayRate,
   relayErrorReason,
   type RelayGroupBinding,
-  type RelayPriceBand,
   type RelayProfitEstimate,
   type RelayRate,
   type RelayRateStatus,
@@ -860,7 +842,6 @@ const bindingColumns = computed<Column[]>(() => [
   { key: 'group', label: t('admin.relayStations.columns.group') },
   { key: 'account_pools', label: t('admin.relayStations.columns.accountPools') },
   { key: 'mode', label: t('admin.relayStations.columns.mode') },
-  { key: 'price_band', label: t('admin.relayStations.columns.priceBand') },
   { key: 'enabled', label: t('admin.relayStations.columns.enabled') },
   { key: 'rate', label: t('admin.relayStations.columns.rate') },
   { key: 'effective_rate', label: t('admin.relayStations.columns.effectiveRate') },
@@ -996,7 +977,7 @@ function rateStatusLabel(status?: RelayRateStatus): string {
 }
 
 function bindingControlLabel(
-  key: 'group' | 'accountPools' | 'mode' | 'priceBand' | 'priority' | 'adjustment' | 'enabled',
+  key: 'group' | 'accountPools' | 'mode' | 'priority' | 'adjustment' | 'enabled',
   source: RelayStationSource
 ): string {
   return `${t(`admin.relayStations.columns.${key}`)}: ${stationById(source.station_id)?.name || source.station_id}`
@@ -1025,7 +1006,16 @@ function rateForSource(source: RelayStationSource): RelayRate | undefined {
 }
 
 function sourceEffectiveRate(source: RelayStationSource): number | null {
-  return effectiveRelayRate(rateForSource(source), source.delta, source.max_rate)
+  return effectiveRelayRate(rateForSource(source), source.delta, source.max_rate, sourceAdjustmentEnabled(source))
+}
+
+function sourceAdjustmentEnabled(source: RelayStationSource): boolean {
+  return source.adjust_rate !== false
+}
+
+function sourceAboveMaxRate(source: RelayStationSource): boolean {
+  const rate = rateForSource(source)
+  return source.max_rate != null && rate?.status === 'ready' && typeof rate.rate === 'number' && rate.rate > source.max_rate
 }
 
 function isLowestSource(source: RelayStationSource): boolean {
@@ -1100,11 +1090,6 @@ function toggleSourceAccountPool(source: RelayStationSource, pool: AIHubAccountP
   bindingsDirty.value = true
 }
 
-function priceBandValue(source: RelayStationSource, key: keyof RelayPriceBand): number | string {
-  const value = source.price_band?.[key]
-  return typeof value === 'number' && Number.isFinite(value) ? value : ''
-}
-
 watch(stationToAdd, () => {
   const first = sourceGroupOptions.value[0]?.value
   sourceGroupToAdd.value = typeof first === 'string' ? first : null
@@ -1123,19 +1108,6 @@ function updateSourceMode(source: RelayStationSource, value: string | number | b
 function updateSourcePriority(source: RelayStationSource, event: Event): void {
   const value = Number((event.target as HTMLInputElement).value)
   if (Number.isInteger(value)) source.priority = value
-  bindingsDirty.value = true
-}
-
-function updatePriceBand(
-  source: RelayStationSource,
-  key: keyof RelayPriceBand,
-  event: Event
-): void {
-  const value = (event.target as HTMLInputElement).value.trim()
-  const band = source.price_band || {}
-  if (value === '') delete band[key]
-  else band[key] = Number(value)
-  source.price_band = Object.keys(band).length ? band : undefined
   bindingsDirty.value = true
 }
 
@@ -1345,7 +1317,8 @@ function addSource(): void {
     source_group: sourceGroup,
     priority: 0,
     delta: 0,
-    ...(station.type === 'aihub' ? { mode: 'balanced', account_pools: [], price_band: {} } : {})
+    adjust_rate: false,
+    ...(station.type === 'aihub' ? { mode: 'balanced', account_pools: [] } : {})
   })
   stationToAdd.value = null
   sourceGroupToAdd.value = null
@@ -1369,6 +1342,11 @@ function updateSourceDelta(source: RelayStationSource, event: Event): void {
   bindingsDirty.value = true
 }
 
+function updateSourceAdjustment(source: RelayStationSource, enabled: boolean): void {
+  source.adjust_rate = enabled
+  bindingsDirty.value = true
+}
+
 function updateSourceMaxRate(source: RelayStationSource, event: Event): void {
   const value = (event.target as HTMLInputElement).value.trim()
   source.max_rate = value === '' ? null : Number(value)
@@ -1388,23 +1366,15 @@ function normalizedBindings(): RelayGroupBinding[] | null {
       group_id: binding.group_id,
       sources: binding.sources.map((source) => {
         const station = stationById(source.station_id)
-        const priceBand = station?.type === 'aihub' && source.price_band
-          ? {
-              min: source.price_band.min === undefined ? undefined : Number(source.price_band.min),
-              max: source.price_band.max === undefined ? undefined : Number(source.price_band.max)
-            }
-          : undefined
         return {
           ...source,
           station_id: source.station_id.trim(),
           source_group: source.source_group?.trim() || 'default',
           delta: Number(source.delta ?? 0),
           max_rate: source.max_rate == null ? undefined : Number(source.max_rate),
+          adjust_rate: sourceAdjustmentEnabled(source),
           mode: station?.type === 'aihub' ? sourceMode(source) : undefined,
-          account_pools: station?.type === 'aihub' ? sourceAccountPools(source) : undefined,
-          price_band: priceBand && (priceBand.min !== undefined || priceBand.max !== undefined)
-            ? priceBand
-            : undefined
+          account_pools: station?.type === 'aihub' ? sourceAccountPools(source) : undefined
         }
       })
     }))
@@ -1423,17 +1393,6 @@ function normalizedBindings(): RelayGroupBinding[] | null {
       if (source.max_rate !== undefined && source.max_rate !== null && (!Number.isFinite(source.max_rate) || source.max_rate < 0)) {
         appStore.showError(t('admin.relayStations.binding.maxRateInvalid'))
         return null
-      }
-      if (source.price_band) {
-        const { min, max } = source.price_band
-        if (
-          (min !== undefined && (!Number.isFinite(min) || min < 0)) ||
-          (max !== undefined && (!Number.isFinite(max) || max < 0)) ||
-          (min !== undefined && max !== undefined && max < min)
-        ) {
-          appStore.showError(t('admin.relayStations.binding.priceBandInvalid'))
-          return null
-        }
       }
     }
   }

@@ -338,6 +338,11 @@ func isOpenAICompatibleAccountEligibleForRequestBeforeProfit(ctx context.Context
 	if account == nil || account.Platform != platform || !account.IsOpenAICompatible() || !account.IsSchedulableForModelWithContext(ctx, requestedModel) {
 		return false
 	}
+	if account.IsRelay() {
+		if _, hasRate := account.RelayEffectiveRate(); !hasRate {
+			return false
+		}
+	}
 	if account.IsOpenAI() {
 		if paused, reason := shouldAutoPauseOpenAIAccountByQuota(ctx, account); paused {
 			// Debug level: this fires per-candidate on the scheduling hot path, so Info

@@ -3685,6 +3685,37 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_SubscriptionPriorityWai
 	require.Equal(t, openAIAccountScheduleLayerLoadBalance, decision.Layer)
 }
 
+func TestOpenAIAccountLoadPlanSkipsRelayWithoutEffectiveRate(t *testing.T) {
+	scheduler := &defaultOpenAIAccountScheduler{}
+	plan := scheduler.buildOpenAIAccountLoadPlan(
+		context.Background(),
+		OpenAIAccountScheduleRequest{},
+		[]*Account{{ID: 99, Extra: map[string]any{relayAccountMarkerKey: true}}},
+		map[int64]*AccountLoadInfo{},
+	)
+	if plan.candidateCount != 0 || len(plan.allCandidates) != 0 {
+		t.Fatalf("relay account without an effective rate remained schedulable: %#v", plan)
+	}
+}
+
+func TestOpenAIEligibilitySkipsRelayWithoutEffectiveRate(t *testing.T) {
+	relay := &Account{
+		Platform:    PlatformOpenAI,
+		Type:        "relay",
+		Status:      StatusActive,
+		Schedulable: true,
+		Extra:       map[string]any{relayAccountMarkerKey: true},
+	}
+	if isOpenAICompatibleAccountEligibleForRequest(context.Background(), relay, PlatformOpenAI, "", false, "") {
+		t.Fatal("relay account without an effective rate remained eligible")
+	}
+
+	relay.Extra["relay_effective_rate"] = 0.1
+	if !isOpenAICompatibleAccountEligibleForRequest(context.Background(), relay, PlatformOpenAI, "", false, "") {
+		t.Fatal("relay account with an effective rate was unexpectedly excluded")
+	}
+}
+
 func TestOpenAICandidateUsesRelayRateAfterPriority(t *testing.T) {
 	cheaper := openAIAccountCandidateScore{
 		account: &Account{ID: 1, Priority: 10, Extra: map[string]any{relayAccountMarkerKey: true, "relay_effective_rate": 0.4}},

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -38,6 +39,8 @@ type RelayStationType string
 
 const (
 	managedAIHubRouterURL = "http://127.0.0.1:8787"
+	managedAIHubUIPasswordEnv = "AIHUB_AUTO_UI_PASSWORD"
+	managedAIHubProxyTokenEnv = "AIHUB_AUTO_PROXY_TOKEN"
 
 	RelayStationTypeAIHub   RelayStationType = "aihub"
 	RelayStationTypeNewAPI  RelayStationType = "newapi"
@@ -76,7 +79,7 @@ type RelayStationSource struct {
 	MaxRate     *float64        `json:"max_rate,omitempty"`
 	Mode         string          `json:"mode,omitempty"`
 	AccountPools []string        `json:"account_pools,omitempty"`
-	PriceBand    *RelayPriceBand `json:"price_band,omitempty"`
+	AdjustRate   *bool           `json:"adjust_rate,omitempty"`
 }
 
 // RelayGroupBinding is persisted as part of the relay configuration.
@@ -888,11 +891,11 @@ func (s *RelayStationService) TestStation(ctx context.Context, id string) ([]Rel
 	}
 	if len(relayRequiredSourceGroups(snapshot, id)[id]) == 0 {
 		if _, err := s.fetchStationRates(ctx, station, map[string]struct{}{"default": {}}); err != nil {
-			return nil, err
+			return nil, infraerrors.New(http.StatusBadGateway, "RELAY_TEST_FAILED", err.Error())
 		}
 	}
 	if err := s.refreshRates(ctx, id); err != nil {
-		return nil, err
+		return nil, infraerrors.New(http.StatusBadGateway, "RELAY_TEST_FAILED", err.Error())
 	}
 	return s.ListRatesForStation(ctx, id)
 }
@@ -971,8 +974,13 @@ func (s *RelayStationService) syncNativeRelayRates(ctx context.Context, snapshot
 	if s == nil || s.accountRepo == nil {
 		return nil
 	}
+	stations := relayStationMap(snapshot.Stations)
 	for _, binding := range snapshot.Bindings {
 		for _, source := range binding.Sources {
+			station, stationFound := stations[source.StationID]
+			if !stationFound {
+				continue
+			}
 			key := relayAccountKey(source.StationID, binding.GroupID, source.SourceGroup)
 			accounts, err := s.accountRepo.FindByExtraField(ctx, relayAccountKeyKey, key)
 			if err != nil {
@@ -985,7 +993,8 @@ func (s *RelayStationService) syncNativeRelayRates(ctx context.Context, snapshot
 			updates := map[string]any{
 				"relay_rate_updated_at":          rate.UpdatedAt.Format(time.RFC3339Nano),
 				"relay_effective_rate":            nil,
-				"relay_model_capability_known":   rate.SupportedModels != nil,
+				"relay_station_type":             string(station.Type),
+				"relay_model_capability_known":   station.Type == RelayStationTypeAIHub && rate.SupportedModels != nil,
 				"relay_supported_models":         rate.SupportedModels,
 			}
 			if effective, ok := relayEffectiveRate(rate, source); ok {
@@ -1471,11 +1480,8 @@ func (s *RelayStationService) validateConfig(candidate *relayStationConfig) erro
 					return infraerrors.BadRequest("RELAY_MODE_INVALID", "aihub relay mode must be economy, balanced, or speed")
 				}
 			}
-			if err := validateRelayPriceBand(source.PriceBand); err != nil {
-				return err
-			}
 			if station.Type == RelayStationTypeAIHub && source.Enabled {
-				policy := relayAIHubConfig{Mode: source.Mode, AccountPoolPlans: append([]string(nil), source.AccountPools...), PriceBand: cloneRelayPriceBand(source.PriceBand)}
+				policy := relayAIHubPolicyForSource(*source)
 				if existing, found := aihubPolicies[source.StationID]; found && !sameRelayAIHubConfig(existing, policy) {
 					return infraerrors.BadRequest("RELAY_AIHUB_POLICY_CONFLICT", "all bindings for an aihub account must use the same aihub-auto policy")
 				}
@@ -1547,6 +1553,24 @@ func (s *RelayStationService) applyAIHubConnectionDefaults(station *relayStation
 	if station.ControlURL == "" {
 		station.ControlURL = station.BaseURL
 	}
+	if station.UIPassword == "" {
+		station.UIPassword = strings.TrimSpace(os.Getenv(managedAIHubUIPasswordEnv))
+	}
+	if station.ProxyToken == "" {
+		station.ProxyToken = strings.TrimSpace(os.Getenv(managedAIHubProxyTokenEnv))
+	}
+}
+
+func relayAIHubPolicyForSource(source RelayStationSource) relayAIHubConfig {
+	policy := relayAIHubConfig{
+		Mode:             source.Mode,
+		AccountPoolPlans: append([]string(nil), source.AccountPools...),
+	}
+	if source.MaxRate != nil {
+		min := 0.0
+		policy.PriceBand = &RelayPriceBand{Min: &min, Max: cloneFloat64(source.MaxRate)}
+	}
+	return policy
 }
 
 func sameRelayAIHubConfig(left, right relayAIHubConfig) bool {
@@ -1600,22 +1624,6 @@ func sameRelayFloat64(left, right *RelayPriceBand, value func(*RelayPriceBand) *
 		return leftValue == nil && rightValue == nil
 	}
 	return *leftValue == *rightValue
-}
-
-func validateRelayPriceBand(band *RelayPriceBand) error {
-	if band == nil {
-		return nil
-	}
-	if band.Min != nil && (math.IsNaN(*band.Min) || math.IsInf(*band.Min, 0) || *band.Min < 0) {
-		return infraerrors.BadRequest("RELAY_PRICE_BAND_INVALID", "relay price_band min must be non-negative")
-	}
-	if band.Max != nil && (math.IsNaN(*band.Max) || math.IsInf(*band.Max, 0) || *band.Max < 0) {
-		return infraerrors.BadRequest("RELAY_PRICE_BAND_INVALID", "relay price_band max must be non-negative")
-	}
-	if band.Min != nil && band.Max != nil && *band.Max < *band.Min {
-		return infraerrors.BadRequest("RELAY_PRICE_BAND_INVALID", "relay price_band max must not be lower than min")
-	}
-	return nil
 }
 
 func relayRequiredSourceGroups(config relayStationConfig, onlyStationID string) map[string]map[string]struct{} {
@@ -1728,7 +1736,10 @@ func relayEffectiveRate(rate RelayStationRate, source RelayStationSource) (float
 	if source.MaxRate != nil && upstream > *source.MaxRate {
 		return 0, false
 	}
-	effective := upstream + source.Delta
+	effective := upstream
+	if source.AdjustRate == nil || *source.AdjustRate {
+		effective += source.Delta
+	}
 	if source.MaxRate != nil && effective > *source.MaxRate {
 		effective = *source.MaxRate
 	}
@@ -1773,7 +1784,7 @@ func cloneRelayBindings(source []RelayGroupBinding) []RelayGroupBinding {
 		clone := RelayGroupBinding{GroupID: binding.GroupID, Sources: make([]RelayStationSource, 0, len(binding.Sources))}
 		for _, item := range binding.Sources {
 			item.AccountPools = append([]string(nil), item.AccountPools...)
-			item.PriceBand = cloneRelayPriceBand(item.PriceBand)
+			item.AdjustRate = cloneBool(item.AdjustRate)
 			clone.Sources = append(clone.Sources, item)
 		}
 		result = append(result, clone)
@@ -1802,6 +1813,14 @@ func cloneRelayRates(source relayRateCache) relayRateCache {
 }
 
 func cloneFloat64(value *float64) *float64 {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
+}
+
+func cloneBool(value *bool) *bool {
 	if value == nil {
 		return nil
 	}

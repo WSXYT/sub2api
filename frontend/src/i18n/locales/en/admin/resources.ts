@@ -736,10 +736,12 @@ export default {
 			groupInvalid:
 				"The station group must be 1-100 characters without control characters",
 			rateAdjustmentInvalid: "The rate adjustment must be a valid number",
+			enableAdjustment: "Apply adjustment",
 			adjustment: "Add",
 			maxRate: "Max",
 			noMaxRate: "No cap",
 			maxRateInvalid: "The maximum rate must be a non-negative number",
+			maxRateExceeded: "Above cap: disabled",
 			priceBandInvalid:
 				"The rate range must use non-negative numbers, with minimum no greater than maximum",
 		},

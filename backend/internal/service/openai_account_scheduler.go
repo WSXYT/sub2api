@@ -832,6 +832,9 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAIAccountLoadPlan(
 			errorRate, ttft, hasTTFT = s.stats.snapshot(account.ID)
 		}
 		effectiveRate, hasRate := account.RelayEffectiveRate()
+		if account.IsRelay() && !hasRate {
+			continue
+		}
 		allCandidates = append(allCandidates, openAIAccountCandidateScore{
 			account:        account,
 			loadInfo:       loadInfo,

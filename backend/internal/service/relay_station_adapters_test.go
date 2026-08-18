@@ -148,8 +148,38 @@ func TestRelayEffectiveRateHonorsMaximum(t *testing.T) {
 	if !ok || got != 0.1 {
 		t.Fatalf("capped effective rate = %v/%v, want 0.1/true", got, ok)
 	}
-	if _, ok := relayEffectiveRate(RelayStationRate{Rate: &second, Status: RelayRateStatusReady}, RelayStationSource{Delta: 0.02, MaxRate: &maxRate}); ok {
-		t.Fatal("source above maximum upstream rate remained routeable")
+	adjustRate := false
+	got, ok = relayEffectiveRate(RelayStationRate{Rate: &first, Status: RelayRateStatusReady}, RelayStationSource{Delta: 0.02, AdjustRate: &adjustRate, MaxRate: &maxRate})
+	if !ok || got != first {
+		t.Fatalf("disabled adjustment rate = %v/%v, want %.2f/true", got, ok, first)
+	}
+	if _, ok := relayEffectiveRate(RelayStationRate{Rate: &second, Status: RelayRateStatusReady}, RelayStationSource{Delta: -0.5, AdjustRate: &adjustRate, MaxRate: &maxRate}); ok {
+		t.Fatal("source above maximum upstream rate remained routeable with adjustment disabled")
+	}
+}
+
+func TestManagedAIHubConnectionUsesSharedSecrets(t *testing.T) {
+	t.Setenv(managedAIHubUIPasswordEnv, "managed-console-password")
+	t.Setenv(managedAIHubProxyTokenEnv, "managed-proxy-token")
+	station := relayStation{Type: RelayStationTypeAIHub}
+	(&RelayStationService{}).applyAIHubConnectionDefaults(&station)
+	if station.UIPassword != "managed-console-password" || station.ProxyToken != "managed-proxy-token" {
+		t.Fatalf("managed aihub secrets = %#v", station)
+	}
+}
+
+func TestAggregateAIHubRouterRateUsesHighestRouteableMultiplier(t *testing.T) {
+	low, high := 0.08, 0.2
+	rate := aggregateAIHubRouterRate([]relayAIHubStatusCandidate{
+		{Rate: &low, Models: []string{"gpt-5"}},
+		{Rate: &high},
+		{Rate: &high, Excluded: true, Models: []string{"claude-*"}},
+	})
+	if rate.Status != RelayRateStatusReady || rate.Rate == nil || *rate.Rate != high {
+		t.Fatalf("aggregated aihub rate = %#v, want highest eligible %.2f", rate, high)
+	}
+	if rate.SupportedModels != nil {
+		t.Fatalf("mixed known and unknown model metadata must remain unrestricted: %#v", rate.SupportedModels)
 	}
 }
 
@@ -215,7 +245,7 @@ func TestListGroupsUsesStationRateSources(t *testing.T) {
 }
 
 func TestSyncAIHubConfigPostsNativePolicy(t *testing.T) {
-	min, max := 0.1, 0.8
+	max := 0.8
 	var received relayAIHubConfig
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/ctl/config" {
@@ -244,7 +274,7 @@ func TestSyncAIHubConfigPostsNativePolicy(t *testing.T) {
 				GroupID: 1,
 				Sources: []RelayStationSource{{
 					StationID: "aihub", Enabled: true, SourceGroup: "local-group", Mode: "economy",
-					AccountPools: []string{"plus", "team"}, PriceBand: &RelayPriceBand{Min: &min, Max: &max},
+					AccountPools: []string{"plus", "team"}, MaxRate: &max,
 				}},
 			}},
 		},
@@ -252,8 +282,8 @@ func TestSyncAIHubConfigPostsNativePolicy(t *testing.T) {
 	if err := service.SyncAIHubConfig(context.Background()); err != nil {
 		t.Fatalf("SyncAIHubConfig: %v", err)
 	}
-	if received.Mode != "economy" || !sameRelayStringSlice(received.AccountPoolPlans, []string{"plus", "team"}) || received.PriceBand == nil || received.PriceBand.Min == nil || received.PriceBand.Max == nil || *received.PriceBand.Min != min || *received.PriceBand.Max != max {
-		t.Fatalf("received policy = %#v, want economy plus+team %.1f-%.1f", received, min, max)
+	if received.Mode != "economy" || !sameRelayStringSlice(received.AccountPoolPlans, []string{"plus", "team"}) || received.PriceBand == nil || received.PriceBand.Min == nil || *received.PriceBand.Min != 0 || received.PriceBand.Max == nil || *received.PriceBand.Max != max {
+		t.Fatalf("received policy = %#v, want economy plus+team max %.1f", received, max)
 	}
 }
 
@@ -263,8 +293,8 @@ func TestAIHubConfigForStationUsesEmptyPoolListForNoFilter(t *testing.T) {
 		Sources: []RelayStationSource{{StationID: "aihub", Enabled: true}},
 	}}}}
 	policy, ok := service.aiHubConfigForStation("aihub")
-	if !ok || policy.AccountPoolPlans == nil || len(policy.AccountPoolPlans) != 0 {
-		t.Fatalf("empty pool policy = %#v/%v, want a non-nil empty list", policy, ok)
+	if !ok || policy.AccountPoolPlans == nil || len(policy.AccountPoolPlans) != 0 || policy.PriceBand != nil {
+		t.Fatalf("empty pool policy = %#v/%v, want an unfiltered, unbounded policy", policy, ok)
 	}
 }
 

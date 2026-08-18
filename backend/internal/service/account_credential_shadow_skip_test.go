@@ -85,6 +85,27 @@ func TestAccountTestServiceRoutesRelayAccountBeforeAccountTypeValidation(t *test
 	require.NotContains(t, err.Error(), "Unsupported account type")
 }
 
+func TestAccountTestServiceExplainsDisabledRelayBinding(t *testing.T) {
+	relay := &Account{
+		ID:          202,
+		Platform:    PlatformOpenAI,
+		Type:        "relay",
+		Status:      StatusActive,
+		Schedulable: false,
+		Extra: map[string]any{
+			relayAccountMarkerKey: true,
+			relayGroupIDKey:       int64(1),
+		},
+	}
+	svc := &AccountTestService{
+		accountRepo:          &shadowSkipTestRepo{account: relay},
+		relayStationService: &RelayStationService{},
+	}
+	err := svc.TestAccountConnection(newShadowTestGinCtx(), relay.ID, "gpt-5", "", "")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Relay account is disabled or its group binding was removed")
+}
+
 // --- 3. EnsureOpenAIPrivacy 守卫 ---
 
 // TestEnsureOpenAIPrivacySkipsShadow 验证影子账号跳过隐私设置（不调用 privacyClientFactory）。

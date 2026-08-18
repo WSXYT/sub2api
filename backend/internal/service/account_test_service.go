@@ -1927,6 +1927,9 @@ func (s *AccountTestService) testRelayAccountConnection(c *gin.Context, account 
 	if s.relayStationService == nil {
 		return s.sendErrorAndEnd(c, "Relay station service is unavailable")
 	}
+	if !account.IsActive() || !account.Schedulable {
+		return s.sendErrorAndEnd(c, "Relay account is disabled or its group binding was removed")
+	}
 	groupID := account.RelayGroupID()
 	if groupID <= 0 {
 		return s.sendErrorAndEnd(c, "Relay account has no group binding")

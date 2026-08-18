@@ -51,11 +51,6 @@ export interface RelayStationUpdateInput {
 	enabled?: boolean;
 }
 
-export interface RelayPriceBand {
-	min?: number;
-	max?: number;
-}
-
 export interface RelayStationSource {
 	station_id: string;
 	enabled: boolean;
@@ -65,7 +60,7 @@ export interface RelayStationSource {
 	max_rate?: number | null;
 	mode?: string;
 	account_pools?: Array<"plus" | "pro" | "team">;
-	price_band?: RelayPriceBand;
+	adjust_rate?: boolean;
 }
 
 export interface RelayAccount {
@@ -139,6 +134,7 @@ export function effectiveRelayRate(
 	rate: RelayRate | undefined,
 	delta: number,
 	maxRate?: number | null,
+	adjustRate = true,
 ): number | null {
 	if (
 		rate?.status !== "ready" ||
@@ -149,7 +145,7 @@ export function effectiveRelayRate(
 	}
 	if (maxRate != null && rate.rate > maxRate) return null;
 	const value = Math.min(
-		rate.rate + Number(delta),
+		rate.rate + (adjustRate ? Number(delta) : 0),
 		maxRate ?? Number.POSITIVE_INFINITY,
 	);
 	return Number.isFinite(value) && value >= 0 ? value : null;

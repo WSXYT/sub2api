@@ -22,8 +22,8 @@ export default {
       toolActions: '工具',
       viewColumns: '列显示',
       relay: {
-        supportedModels: 'AIHub 模型：{models}',
-        modelsUnknown: '上游未报告 AIHub 模型能力'
+        supportedModels: '中转站支持模型：{models}',
+        allModels: '全部模型'
       },
       selectedCount: '已选 {count}',
       dataExportConfirmMessage: '导出的数据包含账号与代理的敏感信息，请妥善保存。',

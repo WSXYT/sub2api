@@ -101,6 +101,7 @@ describe("admin relay stations API", () => {
 		expect(
 			effectiveRelayRate({ ...readyRate, rate: 0.12 }, 0.02, 0.1),
 		).toBeNull();
+		expect(effectiveRelayRate({ ...readyRate, rate: 0.09 }, 0.02, 0.1, false)).toBeCloseTo(0.09);
 	});
 
 	it("reads semantic backend error reasons", () => {

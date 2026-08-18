@@ -721,10 +721,12 @@ export default {
 			noStationGroups: "该中转站暂无可用分组，请检查连接或账号权限。",
 			groupInvalid: "站点分组名称不能为空、不能超过 100 个字符或包含控制字符",
 			rateAdjustmentInvalid: "倍率修正值必须是有效数字",
+			enableAdjustment: "启用倍率修正",
 			adjustment: "增加",
 			maxRate: "上限",
 			noMaxRate: "不限制",
 			maxRateInvalid: "最大倍率必须是非负数字",
+			maxRateExceeded: "超过上限，已禁用",
 			priceBandInvalid: "倍率区间必须为非负数字，且最低值不能高于最高值",
 		},
 		profit: {

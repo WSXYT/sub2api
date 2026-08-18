@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -175,26 +176,17 @@ func (s *RelayStationService) fetchAIHubRates(ctx context.Context, station relay
 	}
 
 	candidates := make(map[string]relayAIHubStatusCandidate, len(payload.Candidates))
-	candidatesByGroupID := make(map[int64]relayAIHubStatusCandidate, len(payload.Candidates))
 	for _, candidate := range payload.Candidates {
 		candidates[candidate.Code] = candidate
-		candidatesByGroupID[candidate.GroupID] = candidate
-	}
-	current, currentFound := candidates[payload.CurrentCode]
-	if !currentFound && payload.CurrentGroupID != nil {
-		current, currentFound = candidatesByGroupID[*payload.CurrentGroupID]
 	}
 
 	result := make(map[string]RelayStationRate, len(required))
 	for sourceGroup := range required {
-		candidate, found := candidates[sourceGroup]
 		if sourceGroup == "default" {
-			candidate, found = current, currentFound
-		} else if !found {
-			// Older aihub-auto instances expose only the active candidate set;
-			// keep named policy bindings routeable until group-prices is available.
-			candidate, found = current, currentFound
+			result[sourceGroup] = aggregateAIHubRouterRate(payload.Candidates)
+			continue
 		}
+		candidate, found := candidates[sourceGroup]
 		if !found || candidate.Rate == nil || candidate.Excluded {
 			result[sourceGroup] = RelayStationRate{Status: RelayRateStatusUnavailable}
 			continue
@@ -314,11 +306,46 @@ func (s *RelayStationService) aiHubConfigForStation(stationID string) (relayAIHu
 	for _, binding := range s.snapshotConfig().Bindings {
 		for _, source := range binding.Sources {
 			if source.StationID == stationID && source.Enabled {
-				return relayAIHubConfig{Mode: source.Mode, AccountPoolPlans: append([]string{}, source.AccountPools...), PriceBand: cloneRelayPriceBand(source.PriceBand)}, true
+				return relayAIHubPolicyForSource(source), true
 			}
 		}
 	}
 	return relayAIHubConfig{}, false
+}
+
+func aggregateAIHubRouterRate(candidates []relayAIHubStatusCandidate) RelayStationRate {
+	var highest *float64
+	modelsKnown := true
+	models := make(map[string]struct{})
+	for _, candidate := range candidates {
+		if candidate.Excluded || candidate.Rate == nil {
+			continue
+		}
+		if highest == nil || *candidate.Rate > *highest {
+			highest = cloneFloat64(candidate.Rate)
+		}
+		if candidate.Models == nil {
+			modelsKnown = false
+			continue
+		}
+		for _, model := range candidate.Models {
+			if model = strings.TrimSpace(model); model != "" {
+				models[model] = struct{}{}
+			}
+		}
+	}
+	if highest == nil {
+		return RelayStationRate{Status: RelayRateStatusUnavailable}
+	}
+	result := RelayStationRate{Rate: highest, Status: RelayRateStatusReady}
+	if modelsKnown {
+		result.SupportedModels = make([]string, 0, len(models))
+		for model := range models {
+			result.SupportedModels = append(result.SupportedModels, model)
+		}
+		sort.Strings(result.SupportedModels)
+	}
+	return result
 }
 
 type relayAIHubStatusCandidate struct {
@@ -618,6 +645,7 @@ func (s *RelayStationService) SyncAIHubConfig(ctx context.Context) error {
 		if !ok {
 			continue
 		}
+		s.applyAIHubConnectionDefaults(&station)
 		if err := s.postAIHubConfig(ctx, station, policy); err != nil {
 			syncErrors = append(syncErrors, err)
 		}
@@ -628,7 +656,7 @@ func (s *RelayStationService) SyncAIHubConfig(ctx context.Context) error {
 type relayAIHubConfig struct {
 	Mode             string          `json:"mode,omitempty"`
 	AccountPoolPlans []string        `json:"accountPoolPlans"`
-	PriceBand        *RelayPriceBand `json:"priceBand,omitempty"`
+	PriceBand        *RelayPriceBand `json:"priceBand"`
 }
 
 func (s *RelayStationService) postAIHubConfig(ctx context.Context, station relayStation, policy relayAIHubConfig) error {
