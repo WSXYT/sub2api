@@ -404,9 +404,6 @@ func validateNativeAccountPriority(priority int) error {
 }
 
 func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]any) (*Account, error) {
-	if err := validateNativeAccountPriority(input.Priority); err != nil {
-		return nil, err
-	}
 	// Probe/session state is system-managed. New accounts always start with automatic refresh disabled.
 	delete(accountExtra, UpstreamBillingProbeEnabledExtraKey)
 	delete(accountExtra, UpstreamBillingRateSyncEnabledExtraKey)

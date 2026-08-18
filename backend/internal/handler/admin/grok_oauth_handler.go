@@ -277,6 +277,10 @@ func (h *GrokOAuthHandler) CreateAccountFromOAuth(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
+	if req.Priority <= 0 {
+		response.BadRequest(c, "priority must be greater than 0")
+		return
+	}
 	tokenInfo, err := h.grokOAuthService.ExchangeCode(c.Request.Context(), &service.GrokExchangeCodeInput{
 		SessionID:   req.SessionID,
 		Code:        req.Code,
@@ -360,6 +364,10 @@ func (h *GrokOAuthHandler) CreateAccountsFromSSO(c *gin.Context) {
 	var req GrokSSOToOAuthRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if req.Priority <= 0 {
+		response.BadRequest(c, "priority must be greater than 0")
 		return
 	}
 	tokens := normalizeSSOImportTokens(req.SSOTokens, req.SSOToken)

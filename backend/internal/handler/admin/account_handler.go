@@ -836,6 +836,10 @@ func (h *AccountHandler) Create(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	if req.Priority <= 0 {
+		response.BadRequest(c, "priority must be greater than 0")
+		return
+	}
 	if req.RateMultiplier != nil && *req.RateMultiplier < 0 {
 		response.BadRequest(c, "rate_multiplier must be >= 0")
 		return
@@ -1908,6 +1912,15 @@ func (h *AccountHandler) BatchCreate(c *gin.Context) {
 		var openaiPrivacyAccounts []*service.Account
 
 		for _, item := range req.Accounts {
+			if item.Priority <= 0 {
+				failed++
+				results = append(results, gin.H{
+					"name":    item.Name,
+					"success": false,
+					"error":   "priority must be greater than 0",
+				})
+				continue
+			}
 			if item.RateMultiplier != nil && *item.RateMultiplier < 0 {
 				failed++
 				results = append(results, gin.H{

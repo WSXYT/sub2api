@@ -315,6 +315,10 @@ func (h *OpenAIOAuthHandler) CreateAccountFromOAuth(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
+	if req.Priority <= 0 {
+		response.BadRequest(c, "priority must be greater than 0")
+		return
+	}
 
 	// Exchange code for tokens
 	tokenInfo, err := h.openaiOAuthService.ExchangeCode(c.Request.Context(), &service.OpenAIExchangeCodeInput{
