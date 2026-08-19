@@ -26,8 +26,8 @@
         <p class="input-hint">{{ t('admin.accounts.notesHint') }}</p>
       </div>
 
-      <!-- API Key fields (only for apikey type) -->
-      <div v-if="account.type === 'apikey'" class="space-y-4">
+      <!-- API Key fields (relay credentials stay station-owned) -->
+      <div v-if="account.type === 'apikey' && !isRelayAccount" class="space-y-4">
         <div>
           <label class="input-label">{{ t('admin.accounts.baseUrl') }}</label>
           <input
@@ -583,7 +583,7 @@
 
       <!-- OAuth and relay accounts use the native model-mapping controls without station credentials. -->
       <div
-        v-if="(account.platform === 'openai' || account.platform === 'grok') && (account.type === 'oauth' || account.type === 'relay')"
+        v-if="(account.platform === 'openai' || account.platform === 'grok') && (account.type === 'oauth' || account.type === 'relay' || isRelayAccount)"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
@@ -718,7 +718,7 @@
       </div>
 
       <div
-        v-if="account.type === 'relay'"
+        v-if="isRelayAccount"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div class="mb-3 flex items-center justify-between">
@@ -1608,7 +1608,7 @@
             }}
           </p>
           <div
-            v-if="account?.type === 'apikey'"
+            v-if="account?.type === 'apikey' && !isRelayAccount"
             class="mt-3 flex items-center justify-between gap-3"
           >
             <div class="min-w-0">
@@ -1833,7 +1833,7 @@
       </div>
 
       <div
-        v-if="account?.type === 'apikey'"
+        v-if="account?.type === 'apikey' && !isRelayAccount"
         class="flex items-center justify-between gap-4 border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div>
@@ -3082,8 +3082,10 @@ const customErrorCodeInput = ref<number | null>(null)
 const headerOverrideEnabled = ref(false)
 const headerOverrideRows = ref<HeaderOverrideRow[]>([])
 
+const isRelayAccount = computed(() => props.account?.extra?.relay_account === true)
+
 const headerOverrideCapable = computed(
-  () => !!props.account && isHeaderOverrideCapable(props.account.platform, props.account.type)
+  () => !!props.account && (isRelayAccount.value || isHeaderOverrideCapable(props.account.platform, props.account.type))
 )
 
 // Grok OAuth 自定义上游地址（仅转发端点；OAuth 授权/令牌刷新不受影响）
@@ -3725,8 +3727,9 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     }
   }
 
-  // Load quota limit for apikey/bedrock accounts (bedrock quota is also loaded in its own branch above)
-  if (newAccount.type === 'apikey' || newAccount.type === 'bedrock') {
+  // Load quota limit for apikey/bedrock accounts (bedrock quota is also loaded in its own branch above).
+  // Relay quota remains station-owned even when its native identity is an API key.
+  if ((newAccount.type === 'apikey' && !isRelayAccount.value) || newAccount.type === 'bedrock') {
     const quotaVal = extra?.quota_limit as number | undefined
     editQuotaLimit.value = (quotaVal && quotaVal > 0) ? quotaVal : null
     const dailyVal = extra?.quota_daily_limit as number | undefined
@@ -3793,10 +3796,10 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   loadTempUnschedRules(credentials)
   loadAccountSchedulingThresholdOverride(newAccount.platform, credentials)
 
-  // Load header override state (anthropic/openai apikey + grok apikey/oauth)
+  // Load header override state (anthropic/openai apikey + grok apikey/oauth + relays)
   headerOverrideEnabled.value = false
   headerOverrideRows.value = []
-  if (newAccount.credentials && isHeaderOverrideCapable(newAccount.platform, newAccount.type)) {
+  if (newAccount.credentials && (isRelayAccount.value || isHeaderOverrideCapable(newAccount.platform, newAccount.type))) {
     const overrideCreds = newAccount.credentials as Record<string, unknown>
     headerOverrideEnabled.value = overrideCreds[HEADER_OVERRIDE_ENABLED_CREDENTIAL_KEY] === true
     headerOverrideRows.value = splitHeaderOverridesObject(
@@ -3824,7 +3827,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   }
 
   // Initialize API Key fields for apikey type
-  if (newAccount.type === 'apikey' && newAccount.credentials) {
+  if (newAccount.type === 'apikey' && !isRelayAccount.value && newAccount.credentials) {
     const credentials = newAccount.credentials as Record<string, unknown>
     // 国产供应商：读取 account_mode 与 api_protocol 作为可编辑初始值
     // （编辑弹窗允许修正两者，用于修复早期存错默认值的账号）。
@@ -3870,7 +3873,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
       selectedErrorCodes.value = []
     }
 
-  } else if (newAccount.type === 'relay' && newAccount.credentials) {
+  } else if (isRelayAccount.value && newAccount.credentials) {
     const relayCreds = newAccount.credentials as Record<string, unknown>
     loadModelRestrictionFromMapping(relayCreds.model_mapping as Record<string, unknown> | undefined)
     poolModeEnabled.value = relayCreds.pool_mode === true
@@ -4508,7 +4511,7 @@ const handleSubmit = async () => {
       updatePayload.load_factor = 0
     }
     updatePayload.auto_pause_on_expired = autoPauseOnExpired.value
-    if (props.account.type === 'apikey') {
+    if (props.account.type === 'apikey' && !isRelayAccount.value) {
       updatePayload.upstream_billing_probe_enabled = upstreamBillingAutoProbeEnabled.value
       updatePayload.upstream_billing_rate_sync_enabled = upstreamBillingRateSyncEnabled.value
       if (upstreamBillingRateSyncEnabled.value) {
@@ -4517,7 +4520,7 @@ const handleSubmit = async () => {
     }
 
     // For apikey type, handle credentials update
-    if (props.account.type === 'apikey') {
+    if (props.account.type === 'apikey' && !isRelayAccount.value) {
       const currentCredentials = (props.account.credentials as Record<string, unknown>) || {}
       const newBaseUrl = editBaseUrl.value.trim() || defaultBaseUrl.value
       const shouldApplyModelMapping = !(props.account.platform === 'openai' && openaiPassthroughEnabled.value)
@@ -4614,7 +4617,7 @@ const handleSubmit = async () => {
       }
 
       updatePayload.credentials = newCredentials
-    } else if (props.account.type === 'relay') {
+    } else if (isRelayAccount.value) {
       const currentCredentials = (props.account.credentials as Record<string, unknown>) || {}
       const newCredentials: Record<string, unknown> = { ...currentCredentials }
       const modelMapping = buildModelRestrictionMapping()
@@ -5125,14 +5128,15 @@ const handleSubmit = async () => {
       updatePayload.extra = newExtra
     }
 
-    // For apikey/bedrock accounts, handle quota_limit in extra
-    if (props.account.type === 'apikey' || props.account.type === 'bedrock') {
+    // For apikey/bedrock accounts, handle quota_limit in extra.
+    // Relay rate and quota ownership stays with the station binding.
+    if ((props.account.type === 'apikey' && !isRelayAccount.value) || props.account.type === 'bedrock') {
       const currentExtra = (updatePayload.extra as Record<string, unknown>) ||
         (props.account.extra as Record<string, unknown>) || {}
       const newExtra: Record<string, unknown> = { ...currentExtra }
       // 上游倍率自动探测对全部 API-key 平台开放（sub2api 上游即可应答），
       // Bedrock 凭证无静态 Key 不参与。
-      if (props.account.type === 'apikey') {
+      if (props.account.type === 'apikey' && !isRelayAccount.value) {
         delete newExtra.upstream_billing_probe_enabled
         delete newExtra.upstream_billing_rate_sync_enabled
       }

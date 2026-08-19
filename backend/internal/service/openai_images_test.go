@@ -581,6 +581,22 @@ func TestAccountSupportsOpenAIEndpointCapability(t *testing.T) {
 		require.True(t, account.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityEmbeddings))
 	})
 
+	t.Run("中转账号不承接 Grok 原生媒体或语音", func(t *testing.T) {
+		relay := &Account{
+			Platform: PlatformGrok,
+			Type:     AccountTypeAPIKey,
+			Extra:    map[string]any{relayAccountMarkerKey: true},
+		}
+
+		require.True(t, relay.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityChatCompletions))
+		require.False(t, relay.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityGrokMediaGeneration))
+		require.False(t, relay.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityGrokNativeVoice))
+		require.False(t, relay.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityGrokNativeMedia))
+		grok := &Account{Platform: PlatformGrok, Type: AccountTypeOAuth}
+		require.True(t, grok.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityGrokNativeVoice))
+		require.True(t, grok.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityGrokNativeMedia))
+	})
+
 	t.Run("未知能力不应默认放行", func(t *testing.T) {
 		account := &Account{
 			Platform: PlatformOpenAI,

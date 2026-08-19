@@ -336,12 +336,22 @@ const (
 	relayNativePriorityBase  = relaySourcePriorityLimit + 1
 )
 
+func relayNativeAccountIdentity(group *Group) (platform, accountType string) {
+	if group != nil && group.Platform == PlatformGrok {
+		return PlatformGrok, AccountTypeAPIKey
+	}
+	return PlatformOpenAI, "relay"
+}
+
 // SyncNativeRelayAccounts creates the native Account identities represented by
 // relay bindings. The station settings remain the transport source of truth;
 // account extra metadata gives native scheduling and admin APIs a stable key.
 func (s *RelayStationService) SyncNativeRelayAccounts(ctx context.Context) error {
 	if s == nil || s.accountRepo == nil {
 		return nil
+	}
+	if s.groupRepo == nil {
+		return infraerrors.New(http.StatusInternalServerError, "RELAY_GROUP_REPOSITORY_UNAVAILABLE", "relay group repository is unavailable")
 	}
 	if err := s.ensureLoaded(ctx); err != nil {
 		return err
@@ -375,6 +385,11 @@ func (s *RelayStationService) SyncNativeRelayAccounts(ctx context.Context) error
 		existingByKey[key] = append(existingByKey[key], account)
 	}
 	for _, binding := range bindings {
+		group, err := s.groupRepo.GetByID(ctx, binding.GroupID)
+		if err != nil {
+			return err
+		}
+		platform, accountType := relayNativeAccountIdentity(group)
 		for _, source := range binding.Sources {
 			station, ok := byID[source.StationID]
 			if !ok {
@@ -383,6 +398,8 @@ func (s *RelayStationService) SyncNativeRelayAccounts(ctx context.Context) error
 			key := relayAccountKey(station.ID, binding.GroupID, source.SourceGroup)
 			for _, account := range existingByKey[key] {
 				account.Name = fmt.Sprintf("%s / %s", station.Name, source.SourceGroup)
+				account.Platform = platform
+				account.Type = accountType
 				account.Priority = relayNativePriority(source.Priority)
 				account.Schedulable = source.Enabled && station.Enabled
 				if err := s.accountRepo.Update(ctx, &account); err != nil {
@@ -397,8 +414,8 @@ func (s *RelayStationService) SyncNativeRelayAccounts(ctx context.Context) error
 			}
 			account := &Account{
 				Name:           fmt.Sprintf("%s / %s", station.Name, source.SourceGroup),
-				Platform:       PlatformOpenAI,
-				Type:           "relay",
+				Platform:       platform,
+				Type:           accountType,
 				Credentials:    map[string]any{},
 				Extra:          map[string]any{relayAccountMarkerKey: true, relayAccountKeyKey: key, relayStationIDKey: station.ID, relayGroupIDKey: binding.GroupID, relaySourceGroupKey: source.SourceGroup},
 				Concurrency:    3,

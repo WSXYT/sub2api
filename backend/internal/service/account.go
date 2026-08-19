@@ -103,6 +103,14 @@ const (
 	// credentials["openai_capabilities"] 配置集。仅用于生图意图的 /v1/responses
 	// 调度，避免把请求调度到会在 forward 阶段被降级为 Chat Completions 的账号（#4417）。
 	OpenAIEndpointCapabilityResponses OpenAIEndpointCapability = "responses"
+	// OpenAIEndpointCapabilityGrokNativeVoice selects Grok's native realtime
+	// and voice endpoints. Relay stations expose only OpenAI-compatible HTTP
+	// forwarding, so relay identities must not be selected for this capability.
+	OpenAIEndpointCapabilityGrokNativeVoice OpenAIEndpointCapability = "grok_native_voice"
+	// OpenAIEndpointCapabilityGrokNativeMedia selects native media status/content
+	// lookups. It intentionally does not apply the new-generation entitlement gate
+	// because already-submitted video jobs must remain queryable.
+	OpenAIEndpointCapabilityGrokNativeMedia OpenAIEndpointCapability = "grok_native_media"
 )
 
 const openAIEndpointCapabilitiesCredentialKey = "openai_capabilities"
@@ -1734,7 +1742,12 @@ func (a *Account) GetOpenAISessionID() string {
 
 func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapability) bool {
 	if a != nil && a.IsRelay() {
-		return true
+		switch capability {
+		case OpenAIEndpointCapabilityGrokMediaGeneration, OpenAIEndpointCapabilityGrokNativeVoice, OpenAIEndpointCapabilityGrokNativeMedia:
+			return false
+		default:
+			return true
+		}
 	}
 	if a == nil {
 		return false
@@ -1747,7 +1760,7 @@ func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapa
 	}
 	if a.IsGrok() {
 		switch capability {
-		case OpenAIEndpointCapabilityChatCompletions:
+		case OpenAIEndpointCapabilityChatCompletions, OpenAIEndpointCapabilityGrokNativeVoice, OpenAIEndpointCapabilityGrokNativeMedia:
 			return true
 		case OpenAIEndpointCapabilityGrokMediaGeneration:
 			eligible, reason := a.GrokMediaGenerationEligibility()

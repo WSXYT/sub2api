@@ -52,8 +52,7 @@ func (h *OpenAIGatewayHandler) GrokRealtime(c *gin.Context) {
 		"grok-4.5",
 		nil,
 		service.OpenAIUpstreamTransportHTTPSSE,
-		// Grok only advertises chat_completions + media capabilities on HEAD.
-		service.OpenAIEndpointCapabilityChatCompletions,
+		service.OpenAIEndpointCapabilityGrokNativeVoice,
 		false,
 		false,
 		false,
@@ -190,7 +189,7 @@ func (h *OpenAIGatewayHandler) GrokVoice(c *gin.Context, endpoint string) {
 			selectionModel,
 			failed,
 			service.OpenAIUpstreamTransportHTTPSSE,
-			service.OpenAIEndpointCapabilityChatCompletions,
+			service.OpenAIEndpointCapabilityGrokNativeVoice,
 			false,
 			false,
 			false,

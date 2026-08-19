@@ -187,6 +187,30 @@ function buildRelayAccount() {
   } as any
 }
 
+function buildGrokRelayAccount() {
+  return {
+    ...buildRelayAccount(),
+    name: 'Grok Relay',
+    platform: 'grok',
+    type: 'apikey',
+    credentials: {
+      model_mapping: {
+        'public-grok': 'grok-4.1'
+      },
+      pool_mode: true,
+      pool_mode_retry_count: 5,
+      pool_mode_retry_status_codes: [401, 429],
+      header_override_enabled: true,
+      header_overrides: { 'x-relay-test': 'enabled' }
+    },
+    extra: {
+      relay_account: true,
+      quota_limit: 99,
+      upstream_billing_probe_enabled: true
+    }
+  } as any
+}
+
 function buildOpenAISparkShadowAccount() {
   const account = buildAccount()
   return {
@@ -384,6 +408,32 @@ describe('EditAccountModal', () => {
       pool_mode: true,
       pool_mode_retry_count: 4,
       pool_mode_retry_status_codes: [401, 429]
+    })
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).not.toHaveProperty('api_key')
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).not.toHaveProperty('base_url')
+  })
+
+  it('keeps a Grok API-key relay station-owned while editing relay controls', async () => {
+    const account = buildGrokRelayAccount()
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    expect(wrapper.find('input[placeholder="https://api.x.ai/v1"]').exists()).toBe(false)
+    expect(wrapper.find('input[placeholder="xai-..."]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="relay-pool-mode-toggle"]').exists()).toBe(true)
+
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).toMatchObject({
+      model_mapping: { 'public-grok': 'grok-4.1' },
+      pool_mode: true,
+      pool_mode_retry_count: 5,
+      header_override_enabled: true,
+      header_overrides: { 'x-relay-test': 'enabled' }
     })
     expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).not.toHaveProperty('api_key')
     expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).not.toHaveProperty('base_url')
