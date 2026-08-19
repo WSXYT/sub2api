@@ -96,8 +96,8 @@ func TestGrokMediaRequiredCapability(t *testing.T) {
 		{name: "video generation", endpoint: service.GrokMediaEndpointVideosGenerations, want: service.OpenAIEndpointCapabilityGrokMediaGeneration},
 		{name: "video edit", endpoint: service.GrokMediaEndpointVideosEdits, want: service.OpenAIEndpointCapabilityGrokMediaGeneration},
 		{name: "video extension", endpoint: service.GrokMediaEndpointVideosExtensions, want: service.OpenAIEndpointCapabilityGrokMediaGeneration},
-		{name: "video status preserves lookup", endpoint: service.GrokMediaEndpointVideoStatus, want: ""},
-		{name: "video content preserves lookup", endpoint: service.GrokMediaEndpointVideoContent, want: ""},
+		{name: "video status uses native media lookup", endpoint: service.GrokMediaEndpointVideoStatus, want: service.OpenAIEndpointCapabilityGrokNativeMedia},
+		{name: "video content uses native media lookup", endpoint: service.GrokMediaEndpointVideoContent, want: service.OpenAIEndpointCapabilityGrokNativeMedia},
 	}
 
 	for _, tt := range tests {

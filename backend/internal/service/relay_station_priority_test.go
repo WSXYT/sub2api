@@ -58,65 +58,71 @@ func (r *relayGroupMultiplierRepo) Update(_ context.Context, group *Group) error
 	return nil
 }
 
-func TestRelayNativeAccountIdentityUsesGrokAPIKey(t *testing.T) {
-	platform, accountType := relayNativeAccountIdentity(&Group{Platform: PlatformGrok})
-	if platform != PlatformGrok || accountType != AccountTypeAPIKey {
-		t.Fatalf("grok relay identity = %s/%s, want %s/%s", platform, accountType, PlatformGrok, AccountTypeAPIKey)
+func TestRelayNativeAccountIdentityUsesPlatformAPIKeys(t *testing.T) {
+	for _, platform := range []string{PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek} {
+		gotPlatform, accountType := relayNativeAccountIdentity(&Group{Platform: platform})
+		if gotPlatform != platform || accountType != AccountTypeAPIKey {
+			t.Fatalf("%s relay identity = %s/%s, want %s/%s", platform, gotPlatform, accountType, platform, AccountTypeAPIKey)
+		}
 	}
 
-	platform, accountType = relayNativeAccountIdentity(&Group{Platform: PlatformOpenAI})
+	platform, accountType := relayNativeAccountIdentity(&Group{Platform: PlatformOpenAI})
 	if platform != PlatformOpenAI || accountType != "relay" {
 		t.Fatalf("openai relay identity = %s/%s, want %s/relay", platform, accountType, PlatformOpenAI)
 	}
 }
 
-func TestSyncNativeRelayAccountsMigratesExistingGrokIdentity(t *testing.T) {
-	const groupID int64 = 9
-	const accountID int64 = 77
-	key := relayAccountKey("station", groupID, "source")
-	accountRepo := &relayNativeAccountRepo{accounts: []Account{{
-		ID:       accountID,
-		Name:     "old station / source",
-		Platform: PlatformOpenAI,
-		Type:     "relay",
-		Extra: map[string]any{
-			relayAccountMarkerKey: true,
-			relayAccountKeyKey:    key,
-			relayStationIDKey:     "station",
-			relayGroupIDKey:       groupID,
-			relaySourceGroupKey:   "source",
-		},
-	}}}
-	groupRepo := &relayGroupMultiplierRepo{groups: map[int64]*Group{
-		groupID: {ID: groupID, Platform: PlatformGrok},
-	}}
-	service := &RelayStationService{
-		accountRepo: accountRepo,
-		groupRepo:   groupRepo,
-		loaded:      true,
-		config: relayStationConfig{
-			Stations: []relayStation{{ID: "station", Name: "Grok station", Enabled: true}},
-			Bindings: []RelayGroupBinding{{GroupID: groupID, Sources: []RelayStationSource{{
-				StationID: "station", SourceGroup: "source", Enabled: true,
-			}}}},
-		},
-	}
+func TestSyncNativeRelayAccountsMigratesExistingRelayIdentity(t *testing.T) {
+	for _, platform := range []string{PlatformGrok, PlatformDeepseek} {
+		t.Run(platform, func(t *testing.T) {
+			const groupID int64 = 9
+			const accountID int64 = 77
+			key := relayAccountKey("station", groupID, "source")
+			accountRepo := &relayNativeAccountRepo{accounts: []Account{{
+				ID:       accountID,
+				Name:     "old station / source",
+				Platform: PlatformOpenAI,
+				Type:     "relay",
+				Extra: map[string]any{
+					relayAccountMarkerKey: true,
+					relayAccountKeyKey:    key,
+					relayStationIDKey:     "station",
+					relayGroupIDKey:       groupID,
+					relaySourceGroupKey:   "source",
+				},
+			}}}
+			groupRepo := &relayGroupMultiplierRepo{groups: map[int64]*Group{
+				groupID: {ID: groupID, Platform: platform},
+			}}
+			service := &RelayStationService{
+				accountRepo: accountRepo,
+				groupRepo:   groupRepo,
+				loaded:      true,
+				config: relayStationConfig{
+					Stations: []relayStation{{ID: "station", Name: platform + " station", Enabled: true}},
+					Bindings: []RelayGroupBinding{{GroupID: groupID, Sources: []RelayStationSource{{
+						StationID: "station", SourceGroup: "source", Enabled: true,
+					}}}},
+				},
+			}
 
-	if err := service.SyncNativeRelayAccounts(context.Background()); err != nil {
-		t.Fatalf("sync relay accounts: %v", err)
-	}
-	if len(accountRepo.updates) != 1 {
-		t.Fatalf("updates = %d, want 1", len(accountRepo.updates))
-	}
-	updated := accountRepo.updates[0]
-	if updated.ID != accountID || updated.Platform != PlatformGrok || updated.Type != AccountTypeAPIKey {
-		t.Fatalf("updated relay identity = id:%d %s/%s, want id:%d %s/%s", updated.ID, updated.Platform, updated.Type, accountID, PlatformGrok, AccountTypeAPIKey)
-	}
-	if !updated.IsRelay() || updated.GetExtraString(relayAccountKeyKey) != key {
-		t.Fatalf("updated relay marker/key were not preserved: %#v", updated.Extra)
-	}
-	if groups := accountRepo.bindings[accountID]; len(groups) != 1 || groups[0] != groupID {
-		t.Fatalf("group binding = %v, want [%d]", groups, groupID)
+			if err := service.SyncNativeRelayAccounts(context.Background()); err != nil {
+				t.Fatalf("sync relay accounts: %v", err)
+			}
+			if len(accountRepo.updates) != 1 {
+				t.Fatalf("updates = %d, want 1", len(accountRepo.updates))
+			}
+			updated := accountRepo.updates[0]
+			if updated.ID != accountID || updated.Platform != platform || updated.Type != AccountTypeAPIKey {
+				t.Fatalf("updated relay identity = id:%d %s/%s, want id:%d %s/%s", updated.ID, updated.Platform, updated.Type, accountID, platform, AccountTypeAPIKey)
+			}
+			if !updated.IsRelay() || updated.GetExtraString(relayAccountKeyKey) != key {
+				t.Fatalf("updated relay marker/key were not preserved: %#v", updated.Extra)
+			}
+			if groups := accountRepo.bindings[accountID]; len(groups) != 1 || groups[0] != groupID {
+				t.Fatalf("group binding = %v, want [%d]", groups, groupID)
+			}
+		})
 	}
 }
 

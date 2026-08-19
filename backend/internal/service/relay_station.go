@@ -337,10 +337,14 @@ const (
 )
 
 func relayNativeAccountIdentity(group *Group) (platform, accountType string) {
-	if group != nil && group.Platform == PlatformGrok {
-		return PlatformGrok, AccountTypeAPIKey
+	if group == nil {
+		return PlatformOpenAI, "relay"
 	}
-	return PlatformOpenAI, "relay"
+	platform = NormalizeOpenAICompatiblePlatform(group.Platform)
+	if platform != PlatformOpenAI {
+		return platform, AccountTypeAPIKey
+	}
+	return platform, "relay"
 }
 
 // SyncNativeRelayAccounts creates the native Account identities represented by
