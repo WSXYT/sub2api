@@ -1188,13 +1188,15 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		if account.IsRelay() {
 			if h.relayService == nil {
 				relayRouteErr = relayGatewayFailoverError(account, 0)
+			} else if apiKey.GroupID == nil {
+				relayRouteErr = relayGatewayFailoverError(account, 0)
 			} else {
-				relayRoute, routeErr := h.relayService.ResolveRouteForAccount(forwardCtx, account, apiKey.GroupID)
+				relayRoute, routeErr := h.relayService.ResolveRouteForAccount(forwardCtx, account, *apiKey.GroupID)
 				if routeErr != nil {
 					relayRouteErr = relayGatewayFailoverError(account, 0)
 				} else {
 					admissionCtx := service.ContextWithSelectionProfitGate(forwardCtx, selection)
-					latest, vetoed, reason := h.gatewayService.GatewayProfitControlVetoLatest(admissionCtx, account)
+					latest, vetoed, reason := h.gatewayService.OpenAIProfitControlVetoLatest(admissionCtx, account)
 					if latest != nil {
 						account = latest
 						selection.Account = latest

@@ -960,6 +960,12 @@ func (s *OpenAIGatewayService) isBetterAccount(candidate, current *Account) bool
 	}
 }
 
+// OpenAIProfitControlVetoLatest performs the terminal profit check for handlers
+// that use the OpenAI gateway service directly.
+func (s *OpenAIGatewayService) OpenAIProfitControlVetoLatest(ctx context.Context, selected *Account) (*Account, bool, string) {
+	return profitControlVetoLatest(ctx, selected, s.schedulerSnapshot)
+}
+
 // SelectAccountWithLoadAwareness selects an account with load-awareness and wait plan.
 func (s *OpenAIGatewayService) SelectAccountWithLoadAwareness(ctx context.Context, groupID *int64, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}) (*AccountSelectionResult, error) {
 	ctx = s.withOpenAIQuotaAutoPauseContext(ctx)
