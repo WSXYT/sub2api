@@ -1183,6 +1183,39 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			return
 		}
 
+		forwardCtx := c.Request.Context()
+		var relayRouteErr error
+		if account.IsRelay() {
+			if h.relayService == nil {
+				relayRouteErr = relayGatewayFailoverError(account, 0)
+			} else {
+				relayRoute, routeErr := h.relayService.ResolveRouteForAccount(forwardCtx, account, apiKey.GroupID)
+				if routeErr != nil {
+					relayRouteErr = relayGatewayFailoverError(account, 0)
+				} else {
+					admissionCtx := service.ContextWithSelectionProfitGate(forwardCtx, selection)
+					latest, vetoed, reason := h.gatewayService.GatewayProfitControlVetoLatest(admissionCtx, account)
+					if latest != nil {
+						account = latest
+						selection.Account = latest
+					}
+					if vetoed {
+						if accountReleaseFunc != nil {
+							accountReleaseFunc()
+							accountReleaseFunc = nil
+						}
+						reqLog.Debug("openai_messages.relay_route_profit_vetoed", zap.Int64("account_id", account.ID), zap.String("reason", reason))
+						if !recordOpenAIProfitVeto(failedAccountIDs, account.ID, &profitVetoCount) {
+							h.handleOpenAIProfitVetoExhausted(c, streamStarted, reqLog, profitVetoCount)
+							return
+						}
+						continue
+					}
+					forwardCtx = service.WithRelayAnthropicForwardRoute(admissionCtx, h.relayService, relayRoute)
+				}
+			}
+		}
+
 		service.SetOpsLatencyMs(c, service.OpsRoutingLatencyMsKey, time.Since(routingStart).Milliseconds())
 		forwardStart := time.Now()
 
@@ -1196,7 +1229,10 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 					accountReleaseFunc()
 				}
 			}()
-			return h.gatewayService.ForwardAsAnthropic(c.Request.Context(), c, account, forwardBody, promptCacheKey, defaultMappedModel)
+			if relayRouteErr != nil {
+				return nil, relayRouteErr
+			}
+			return h.gatewayService.ForwardAsAnthropic(forwardCtx, c, account, forwardBody, promptCacheKey, defaultMappedModel)
 		}()
 		cyberBlockKeyMsg := ""
 		if service.GetOpsCyberPolicy(c) != nil {

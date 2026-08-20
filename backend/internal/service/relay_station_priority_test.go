@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 )
@@ -277,5 +278,37 @@ func TestSyncRelayGroupRateMultipliersUsesHighestEnabledCorrection(t *testing.T)
 	}
 	if len(repo.updates) != 1 || repo.updates[0] != 1 {
 		t.Fatalf("updated groups = %v, want only group 1", repo.updates)
+	}
+}
+
+func TestCachedRelayRouteRequiresFreshRateAndCarriesEffectiveRate(t *testing.T) {
+	now := time.Now()
+	rateValue := 0.2
+	service := &RelayStationService{
+		revision: 1,
+		routes: map[string]relayRouteCacheEntry{
+			"7:session": {StationID: "station", SourceGroup: "default", ExpiresAt: now.Add(time.Minute), Revision: 1},
+		},
+		rates: relayRateCache{Rates: map[string]map[string]RelayStationRate{
+			"station": {"default": {Rate: &rateValue, Status: RelayRateStatusReady, UpdatedAt: now}},
+		}},
+	}
+	config := relayStationConfig{
+		Stations: []relayStation{{ID: "station", Type: RelayStationTypeSub2API, Enabled: true}},
+		Bindings: []RelayGroupBinding{{GroupID: 7, Sources: []RelayStationSource{{
+			StationID: "station", SourceGroup: "default", Enabled: true, Delta: 0.1,
+		}}}},
+	}
+
+	route := service.cachedRoute(config, "7:session")
+	if route == nil || math.Abs(route.EffectiveRate()-0.3) > 1e-9 {
+		t.Fatalf("cached route = %#v, want effective rate 0.3", route)
+	}
+
+	service.rates.Rates["station"]["default"] = RelayStationRate{
+		Rate: &rateValue, Status: RelayRateStatusReady, UpdatedAt: now.Add(-2 * relayStationRatePollInterval),
+	}
+	if route := service.cachedRoute(config, "7:session"); route != nil {
+		t.Fatalf("stale cached route = %#v, want nil", route)
 	}
 }

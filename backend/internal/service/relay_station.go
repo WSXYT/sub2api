@@ -282,6 +282,34 @@ type RelayRoute struct {
 	effectiveRate float64
 }
 
+type relayAnthropicForwardContext struct {
+	service *RelayStationService
+	route   *RelayRoute
+}
+
+// WithRelayAnthropicForwardRoute attaches a resolved relay route to the
+// Messages compatibility bridge. The route is resolved after account-slot
+// acquisition so the bridge cannot fall back to native account credentials.
+func WithRelayAnthropicForwardRoute(ctx context.Context, relayService *RelayStationService, route *RelayRoute) context.Context {
+	if ctx == nil || relayService == nil || route == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, relayAnthropicForwardContextKey{}, relayAnthropicForwardContext{
+		service: relayService,
+		route:   route,
+	})
+}
+
+func relayAnthropicForwardRoute(ctx context.Context) (relayAnthropicForwardContext, bool) {
+	if ctx == nil {
+		return relayAnthropicForwardContext{}, false
+	}
+	value, ok := ctx.Value(relayAnthropicForwardContextKey{}).(relayAnthropicForwardContext)
+	return value, ok && value.service != nil && value.route != nil
+}
+
+type relayAnthropicForwardContextKey struct{}
+
 func (r *RelayRoute) StationID() string {
 	if r == nil {
 		return ""
@@ -1506,7 +1534,19 @@ func (s *RelayStationService) cachedRoute(configSnapshot relayStationConfig, key
 	if !stationOK || !sourceOK || !station.Enabled || !source.Enabled {
 		return nil
 	}
-	return &RelayRoute{station: station, source: source}
+	if station.Type == RelayStationTypeAIHub && strings.TrimSpace(station.BaseURL) == "" {
+		return nil
+	}
+	rate := s.snapshotRates().Rates[station.ID][source.SourceGroup]
+	now := time.Now()
+	if !rateReadyForRoute(rate, now) {
+		return nil
+	}
+	effectiveRate, ok := relayEffectiveRate(rate, source)
+	if !ok {
+		return nil
+	}
+	return &RelayRoute{station: station, source: source, effectiveRate: effectiveRate}
 }
 
 func (s *RelayStationService) hasReadyRate(binding RelayGroupBinding, now time.Time) bool {

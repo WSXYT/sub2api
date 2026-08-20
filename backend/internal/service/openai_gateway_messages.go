@@ -295,6 +295,14 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		}
 	}
 
+	if relayForward, ok := relayAnthropicForwardRoute(ctx); ok {
+		reasoningEffort := ""
+		if responsesReq.Reasoning != nil {
+			reasoningEffort = responsesReq.Reasoning.Effort
+		}
+		return s.forwardAnthropicViaRelay(ctx, c, account, relayForward, responsesBody, originalModel, billingModel, upstreamModel, clientStream, responsesReq.ServiceTier, reasoningEffort, startTime)
+	}
+
 	// 5. Get access token
 	token, _, err := s.getRequestCredential(ctx, c, account)
 	if err != nil {
@@ -505,6 +513,91 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	}
 
 	return result, handleErr
+}
+
+func (s *OpenAIGatewayService) forwardAnthropicViaRelay(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+	forward relayAnthropicForwardContext,
+	body []byte,
+	originalModel string,
+	billingModel string,
+	upstreamModel string,
+	clientStream bool,
+	serviceTier string,
+	reasoningEffort string,
+	startTime time.Time,
+) (*OpenAIForwardResult, error) {
+	if forward.service == nil || forward.route == nil {
+		return nil, relayAnthropicFailoverError(account, 0)
+	}
+
+	var inbound *http.Request
+	if c != nil && c.Request != nil {
+		inbound = c.Request.Clone(ctx)
+	} else {
+		var err error
+		inbound, err = http.NewRequestWithContext(ctx, http.MethodPost, "http://relay.invalid/v1/responses", nil)
+		if err != nil {
+			return nil, relayAnthropicFailoverError(account, 0)
+		}
+	}
+	inbound.URL.Path = "/v1/responses"
+	inbound.URL.RawPath = ""
+	inbound.Body = io.NopCloser(bytes.NewReader(body))
+	inbound.ContentLength = int64(len(body))
+	inbound.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(body)), nil
+	}
+	inbound.Header.Set("Content-Type", "application/json")
+	inbound.Header.Set("Accept", "text/event-stream")
+	inbound.Header.Set("X-Sub2API-Relay-Expected-Stream", "1")
+
+	response, err := forward.service.ForwardAccount(ctx, account, forward.route, inbound)
+	if err != nil || response == nil {
+		status, _ := RelayUpstreamStatus(err)
+		return nil, relayAnthropicFailoverError(account, status)
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return nil, relayAnthropicFailoverError(account, response.StatusCode)
+	}
+
+	var result *OpenAIForwardResult
+	if clientStream {
+		result, err = s.handleAnthropicStreamingResponse(response, c, account, originalModel, billingModel, upstreamModel, startTime)
+	} else {
+		result, err = s.handleAnthropicBufferedStreamingResponse(response, c, account, originalModel, billingModel, upstreamModel, startTime)
+	}
+	if err != nil {
+		return result, err
+	}
+	if GetOpsCyberPolicy(c) != nil {
+		return nil, errOpenAICyberPolicyForwarded
+	}
+	if result != nil {
+		if serviceTier != "" {
+			result.ServiceTier = &serviceTier
+		}
+		if reasoningEffort != "" {
+			result.ReasoningEffort = &reasoningEffort
+		}
+	}
+	return result, nil
+}
+
+func relayAnthropicFailoverError(account *Account, upstreamStatus int) error {
+	retryableOnSameAccount := account != nil && account.IsPoolMode() && account.IsPoolModeRetryableStatus(upstreamStatus)
+	return &UpstreamFailoverError{
+		StatusCode:             http.StatusBadGateway,
+		ResponseBody:           []byte(`{"error":{"message":"Upstream request failed"}}`),
+		RetryableOnSameAccount: retryableOnSameAccount,
+		Stage:                  GatewayFailureStageInference,
+		Scope:                  GatewayFailureScopeAccount,
+		ClientStatusCode:       http.StatusBadGateway,
+		ClientMessage:          "Upstream request failed",
+	}
 }
 
 func ensureCodexOAuthInstructionsField(reqBody map[string]any) {
