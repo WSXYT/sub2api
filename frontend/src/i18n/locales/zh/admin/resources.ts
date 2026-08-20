@@ -723,7 +723,7 @@ export default {
 			rateAdjustmentInvalid: "倍率修正值必须是有效数字",
 			enableAdjustment: "启用倍率修正",
 			adjustment: "增加",
-			maxRate: "上限",
+			maxRate: "接入上限",
 			noMaxRate: "不限制",
 			maxRateInvalid: "最大倍率必须是非负数字",
 			maxRateExceeded: "超过上限，已禁用",

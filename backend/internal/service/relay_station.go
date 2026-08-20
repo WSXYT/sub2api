@@ -93,15 +93,16 @@ type RelayPriceBand struct {
 
 // RelayStationSource binds one local group to an upstream station and source group.
 type RelayStationSource struct {
-	StationID    string   `json:"station_id"`
-	Enabled      bool     `json:"enabled"`
-	SourceGroup  string   `json:"source_group,omitempty"`
-	Priority     int      `json:"priority"`
-	Delta        float64  `json:"delta"`
-	MaxRate      *float64 `json:"max_rate,omitempty"`
-	Mode         string   `json:"mode,omitempty"`
-	AccountPools []string `json:"account_pools,omitempty"`
-	AdjustRate   *bool    `json:"adjust_rate,omitempty"`
+	StationID    string          `json:"station_id"`
+	Enabled      bool            `json:"enabled"`
+	SourceGroup  string          `json:"source_group,omitempty"`
+	Priority     int             `json:"priority"`
+	Delta        float64         `json:"delta"`
+	MaxRate      *float64        `json:"max_rate,omitempty"`
+	Mode         string          `json:"mode,omitempty"`
+	AccountPools []string        `json:"account_pools,omitempty"`
+	PriceBand    *RelayPriceBand `json:"price_band,omitempty"`
+	AdjustRate   *bool           `json:"adjust_rate,omitempty"`
 }
 
 // RelayGroupBinding is persisted as part of the relay configuration.
@@ -1639,6 +1640,15 @@ func (s *RelayStationService) validateConfig(candidate *relayStationConfig) erro
 			if source.MaxRate != nil && (*source.MaxRate < 0 || math.IsNaN(*source.MaxRate) || math.IsInf(*source.MaxRate, 0)) {
 				return infraerrors.BadRequest("RELAY_MAX_RATE_INVALID", "relay source max_rate must be a finite non-negative number")
 			}
+			if station.Type != RelayStationTypeAIHub {
+				source.PriceBand = nil
+			} else if source.PriceBand != nil {
+				if source.PriceBand.Min == nil || source.PriceBand.Max == nil ||
+					*source.PriceBand.Min < 0 || math.IsNaN(*source.PriceBand.Min) || math.IsInf(*source.PriceBand.Min, 0) ||
+					*source.PriceBand.Max < *source.PriceBand.Min || math.IsNaN(*source.PriceBand.Max) || math.IsInf(*source.PriceBand.Max, 0) {
+					return infraerrors.BadRequest("RELAY_PRICE_BAND_INVALID", "aihub price_band requires finite non-negative min and max values with min no greater than max")
+				}
+			}
 			if station.Type == RelayStationTypeAIHub && source.Mode != "" {
 				switch source.Mode {
 				case "economy", "balanced", "speed":
@@ -1728,15 +1738,11 @@ func (s *RelayStationService) applyAIHubConnectionDefaults(station *relayStation
 }
 
 func relayAIHubPolicyForSource(source RelayStationSource) relayAIHubConfig {
-	policy := relayAIHubConfig{
+	return relayAIHubConfig{
 		Mode:             source.Mode,
 		AccountPoolPlans: append([]string{}, source.AccountPools...),
+		PriceBand:        cloneRelayPriceBand(source.PriceBand),
 	}
-	if source.MaxRate != nil {
-		min := 0.0
-		policy.PriceBand = &RelayPriceBand{Min: &min, Max: cloneFloat64(source.MaxRate)}
-	}
-	return policy
 }
 
 func sameRelayAIHubConfig(left, right relayAIHubConfig) bool {
@@ -1950,6 +1956,8 @@ func cloneRelayBindings(source []RelayGroupBinding) []RelayGroupBinding {
 		clone := RelayGroupBinding{GroupID: binding.GroupID, Sources: make([]RelayStationSource, 0, len(binding.Sources))}
 		for _, item := range binding.Sources {
 			item.AccountPools = append([]string(nil), item.AccountPools...)
+			item.MaxRate = cloneFloat64(item.MaxRate)
+			item.PriceBand = cloneRelayPriceBand(item.PriceBand)
 			item.AdjustRate = cloneBool(item.AdjustRate)
 			clone.Sources = append(clone.Sources, item)
 		}
@@ -1977,6 +1985,13 @@ func cloneFloat64(value *float64) *float64 {
 	}
 	copy := *value
 	return &copy
+}
+
+func cloneRelayPriceBand(value *RelayPriceBand) *RelayPriceBand {
+	if value == nil {
+		return nil
+	}
+	return &RelayPriceBand{Min: cloneFloat64(value.Min), Max: cloneFloat64(value.Max)}
 }
 
 func cloneBool(value *bool) *bool {

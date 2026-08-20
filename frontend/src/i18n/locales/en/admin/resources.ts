@@ -738,7 +738,7 @@ export default {
 			rateAdjustmentInvalid: "The rate adjustment must be a valid number",
 			enableAdjustment: "Apply adjustment",
 			adjustment: "Add",
-			maxRate: "Max",
+			maxRate: "Routing cap",
 			noMaxRate: "No cap",
 			maxRateInvalid: "The maximum rate must be a non-negative number",
 			maxRateExceeded: "Above cap: disabled",

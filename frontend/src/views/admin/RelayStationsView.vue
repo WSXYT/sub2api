@@ -363,6 +363,33 @@
               />
             </template>
 
+            <template #cell-price_band="{ row }">
+              <div v-if="stationById(row.station_id)?.type === 'aihub'" class="flex min-w-52 items-center gap-2">
+                <input
+                  :value="row.price_band?.min ?? ''"
+                  type="number"
+                  min="0"
+                  step="0.0001"
+                  class="input w-24"
+                  :aria-label="`${bindingControlLabel('priceBand', row)}: ${t('admin.relayStations.binding.minimum')}`"
+                  :placeholder="t('admin.relayStations.binding.minimum')"
+                  @input="updateSourcePriceBand(row, 'min', $event)"
+                />
+                <span class="text-gray-400">-</span>
+                <input
+                  :value="row.price_band?.max ?? ''"
+                  type="number"
+                  min="0"
+                  step="0.0001"
+                  class="input w-24"
+                  :aria-label="`${bindingControlLabel('priceBand', row)}: ${t('admin.relayStations.binding.maximum')}`"
+                  :placeholder="t('admin.relayStations.binding.maximum')"
+                  @input="updateSourcePriceBand(row, 'max', $event)"
+                />
+              </div>
+              <span v-else class="text-gray-400">-</span>
+            </template>
+
             <template #cell-account_pools="{ row }">
               <div v-if="stationById(row.station_id)?.type === 'aihub'" class="flex min-w-48 flex-wrap gap-2">
                 <label
@@ -841,6 +868,7 @@ const bindingColumns = computed<Column[]>(() => [
   { key: 'priority', label: t('admin.relayStations.columns.priority') },
   { key: 'adjustment', label: t('admin.relayStations.columns.adjustment') },
   { key: 'group', label: t('admin.relayStations.columns.group') },
+  { key: 'price_band', label: t('admin.relayStations.columns.priceBand') },
   { key: 'account_pools', label: t('admin.relayStations.columns.accountPools') },
   { key: 'mode', label: t('admin.relayStations.columns.mode') },
   { key: 'enabled', label: t('admin.relayStations.columns.enabled') },
@@ -978,7 +1006,7 @@ function rateStatusLabel(status?: RelayRateStatus): string {
 }
 
 function bindingControlLabel(
-  key: 'group' | 'accountPools' | 'mode' | 'priority' | 'adjustment' | 'enabled',
+  key: 'group' | 'priceBand' | 'accountPools' | 'mode' | 'priority' | 'adjustment' | 'enabled',
   source: RelayStationSource
 ): string {
   return `${t(`admin.relayStations.columns.${key}`)}: ${stationById(source.station_id)?.name || source.station_id}`
@@ -1103,6 +1131,14 @@ function updateSourceGroup(source: RelayStationSource, value: string | number | 
 
 function updateSourceMode(source: RelayStationSource, value: string | number | boolean | null): void {
   if (value === 'economy' || value === 'balanced' || value === 'speed') source.mode = value
+  bindingsDirty.value = true
+}
+
+function updateSourcePriceBand(source: RelayStationSource, key: 'min' | 'max', event: Event): void {
+  const text = (event.target as HTMLInputElement).value.trim()
+  const band = source.price_band ?? { min: null, max: null }
+  band[key] = text === '' ? null : Number(text)
+  source.price_band = band.min === null && band.max === null ? null : band
   bindingsDirty.value = true
 }
 
@@ -1319,7 +1355,7 @@ function addSource(): void {
     priority: 0,
     delta: 0,
     adjust_rate: false,
-    ...(station.type === 'aihub' ? { mode: 'balanced', account_pools: [] } : {})
+    ...(station.type === 'aihub' ? { mode: 'balanced', account_pools: [], price_band: null } : {})
   })
   stationToAdd.value = null
   sourceGroupToAdd.value = null
@@ -1375,7 +1411,8 @@ function normalizedBindings(): RelayGroupBinding[] | null {
           max_rate: source.max_rate == null ? undefined : Number(source.max_rate),
           adjust_rate: sourceAdjustmentEnabled(source),
           mode: station?.type === 'aihub' ? sourceMode(source) : undefined,
-          account_pools: station?.type === 'aihub' ? sourceAccountPools(source) : undefined
+          account_pools: station?.type === 'aihub' ? sourceAccountPools(source) : undefined,
+          price_band: station?.type === 'aihub' ? source.price_band ?? undefined : undefined
         }
       })
     }))
@@ -1394,6 +1431,13 @@ function normalizedBindings(): RelayGroupBinding[] | null {
       if (source.max_rate !== undefined && source.max_rate !== null && (!Number.isFinite(source.max_rate) || source.max_rate < 0)) {
         appStore.showError(t('admin.relayStations.binding.maxRateInvalid'))
         return null
+      }
+      if (source.price_band != null) {
+        const { min, max } = source.price_band
+        if (typeof min !== 'number' || typeof max !== 'number' || !Number.isFinite(min) || !Number.isFinite(max) || min < 0 || max < min) {
+          appStore.showError(t('admin.relayStations.binding.priceBandInvalid'))
+          return null
+        }
       }
     }
   }

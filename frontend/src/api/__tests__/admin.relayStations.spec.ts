@@ -70,6 +70,28 @@ describe("admin relay stations API", () => {
 		});
 	});
 
+	it("saves AIHub plan combinations and an independent price band", async () => {
+		const bindings = [{
+			group_id: 7,
+			sources: [{
+				station_id: "aihub-1",
+				enabled: true,
+				source_group: "default",
+				priority: 0,
+				delta: 0.1,
+				max_rate: 0.4,
+				mode: "balanced",
+				account_pools: ["plus", "pro", "team"] as Array<"plus" | "pro" | "team">,
+				price_band: { min: 0.05, max: 0.3 },
+				adjust_rate: true,
+			}],
+		}];
+		put.mockResolvedValue({ data: { bindings, aihub_synced: true } });
+
+		await expect(updateBindings(bindings)).resolves.toEqual({ bindings, aihub_synced: true });
+		expect(put).toHaveBeenCalledWith("/admin/relay-stations/bindings", { bindings });
+	});
+
 	it("lists and updates relay accounts through the relay API", async () => {
 		get.mockResolvedValue({ data: { accounts: [{ station_id: "station-1" }] } });
 		patch.mockResolvedValue({ data: { updated: true } });

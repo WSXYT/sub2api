@@ -60,6 +60,7 @@ export interface RelayStationSource {
 	max_rate?: number | null;
 	mode?: string;
 	account_pools?: Array<"plus" | "pro" | "team">;
+	price_band?: { min: number | null; max: number | null } | null;
 	adjust_rate?: boolean;
 }
 

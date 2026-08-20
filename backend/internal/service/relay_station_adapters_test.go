@@ -517,7 +517,9 @@ func TestListGroupsUsesStationRateSources(t *testing.T) {
 }
 
 func TestSyncAIHubConfigPostsNativePolicy(t *testing.T) {
-	max := 0.8
+	localMax := 0.4
+	bandMin := 0.1
+	bandMax := 0.8
 	var received relayAIHubConfig
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/ctl/config" {
@@ -546,7 +548,8 @@ func TestSyncAIHubConfigPostsNativePolicy(t *testing.T) {
 				GroupID: 1,
 				Sources: []RelayStationSource{{
 					StationID: "aihub", Enabled: true, SourceGroup: "local-group", Mode: "economy",
-					AccountPools: []string{"plus", "team"}, MaxRate: &max,
+					AccountPools: []string{"plus", "team"}, MaxRate: &localMax,
+					PriceBand: &RelayPriceBand{Min: &bandMin, Max: &bandMax},
 				}},
 			}},
 		},
@@ -554,19 +557,58 @@ func TestSyncAIHubConfigPostsNativePolicy(t *testing.T) {
 	if err := service.SyncAIHubConfig(context.Background()); err != nil {
 		t.Fatalf("SyncAIHubConfig: %v", err)
 	}
-	if received.Mode != "economy" || !sameRelayStringSlice(received.AccountPoolPlans, []string{"plus", "team"}) || received.PriceBand == nil || received.PriceBand.Min == nil || *received.PriceBand.Min != 0 || received.PriceBand.Max == nil || *received.PriceBand.Max != max {
-		t.Fatalf("received policy = %#v, want economy plus+team max %.1f", received, max)
+	if received.Mode != "economy" || !sameRelayStringSlice(received.AccountPoolPlans, []string{"plus", "team"}) || received.PriceBand == nil || received.PriceBand.Min == nil || *received.PriceBand.Min != bandMin || received.PriceBand.Max == nil || *received.PriceBand.Max != bandMax {
+		t.Fatalf("received policy = %#v, want economy plus+team band %.1f-%.1f", received, bandMin, bandMax)
+	}
+}
+
+func TestValidateAIHubPriceBandRejectsInvalidRange(t *testing.T) {
+	min := 0.4
+	max := 0.2
+	service := &RelayStationService{}
+	candidate := relayStationConfig{
+		Stations: []relayStation{{
+			ID: "aihub", Type: RelayStationTypeAIHub, Name: "AIHub", BaseURL: managedAIHubRouterURL,
+			Username: "user@example.com", Enabled: true,
+		}},
+		Bindings: []RelayGroupBinding{{
+			GroupID: 1,
+			Sources: []RelayStationSource{{
+				StationID: "aihub", Enabled: true, PriceBand: &RelayPriceBand{Min: &min, Max: &max},
+			}},
+		}},
+	}
+	if err := service.validateConfig(&candidate); err == nil {
+		t.Fatal("invalid AIHub price band was accepted")
 	}
 }
 
 func TestAIHubConfigForStationUsesEmptyPoolListForNoFilter(t *testing.T) {
+	localMax := 0.4
 	service := &RelayStationService{config: relayStationConfig{Bindings: []RelayGroupBinding{{
 		GroupID: 1,
-		Sources: []RelayStationSource{{StationID: "aihub", Enabled: true}},
+		Sources: []RelayStationSource{{StationID: "aihub", Enabled: true, MaxRate: &localMax}},
 	}}}}
 	policy, ok := service.aiHubConfigForStation("aihub")
 	if !ok || policy.AccountPoolPlans == nil || len(policy.AccountPoolPlans) != 0 || policy.PriceBand != nil {
-		t.Fatalf("empty pool policy = %#v/%v, want an unfiltered, unbounded policy", policy, ok)
+		t.Fatalf("empty pool policy = %#v/%v, want an unfiltered, unbounded policy independent of local max_rate", policy, ok)
+	}
+}
+
+func TestNormalizeRelayAccountPoolsSupportsEveryCombination(t *testing.T) {
+	for _, test := range []struct {
+		input []string
+		want  []string
+	}{
+		{input: nil, want: []string{}},
+		{input: []string{"plus"}, want: []string{"plus"}},
+		{input: []string{"pro", "team"}, want: []string{"pro", "team"}},
+		{input: []string{"TEAM", "plus", "pro", "plus"}, want: []string{"plus", "pro", "team"}},
+	} {
+		got, err := normalizeRelayAccountPools(test.input)
+		if err != nil || !sameRelayStringSlice(got, test.want) {
+			t.Fatalf("normalizeRelayAccountPools(%v) = %v/%v, want %v", test.input, got, err, test.want)
+		}
 	}
 }
 
