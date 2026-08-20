@@ -77,7 +77,12 @@ func TestApplyRelayGatewayResultReadsGeminiUsage(t *testing.T) {
 }
 
 func TestRelayGatewayFailoverErrorPreservesPoolRetryWithoutClientDetails(t *testing.T) {
-	account := &service.Account{Credentials: map[string]any{"pool_mode": true}}
+	account := &service.Account{
+		Platform:    service.PlatformOpenAI,
+		Type:        "relay",
+		Credentials: map[string]any{"pool_mode": true},
+		Extra:       map[string]any{"relay_account": true},
+	}
 	failoverErr, ok := relayGatewayFailoverError(account, http.StatusTooManyRequests).(*service.UpstreamFailoverError)
 	if !ok {
 		t.Fatalf("unexpected relay failover error type")

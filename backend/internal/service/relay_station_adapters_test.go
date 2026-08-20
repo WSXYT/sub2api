@@ -226,6 +226,53 @@ func TestForwardAccountHidesSuccessfulStatusErrorPayloads(t *testing.T) {
 	}
 }
 
+func TestForwardAccountPreservesValidIncompleteResponses(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		contentType string
+		body        string
+		stream      bool
+	}{
+		{
+			name:        "json",
+			contentType: "application/json",
+			body:        `{"id":"resp_test","type":"response.incomplete","status":"incomplete","output":[],"usage":{"input_tokens":12,"output_tokens":4},"incomplete_details":{"reason":"max_output_tokens"}}`,
+		},
+		{
+			name:        "sse",
+			contentType: "text/event-stream",
+			body:        "event: response.incomplete\ndata: {\"type\":\"response.incomplete\",\"response\":{\"id\":\"resp_test\",\"status\":\"incomplete\",\"output\":[],\"usage\":{\"input_tokens\":12,\"output_tokens\":4},\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}}\n\n",
+			stream:      true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", test.contentType)
+				_, _ = io.WriteString(w, test.body)
+			}))
+			defer upstream.Close()
+
+			service := &RelayStationService{}
+			inbound, _ := http.NewRequest(http.MethodPost, "http://sub2api.test/v1/responses", nil)
+			if test.stream {
+				inbound.Header.Set("Accept", "text/event-stream")
+			}
+			response, err := service.ForwardAccount(context.Background(), &Account{}, &RelayRoute{
+				station: relayStation{ID: "private", Type: RelayStationTypeSub2API, BaseURL: upstream.URL, ProxyToken: "token"},
+				source:  RelayStationSource{SourceGroup: "default"},
+			}, inbound)
+			if err != nil {
+				t.Fatalf("ForwardAccount(): %v", err)
+			}
+			payload, readErr := io.ReadAll(response.Body)
+			_ = response.Body.Close()
+			if readErr != nil || !strings.Contains(string(payload), "max_output_tokens") {
+				t.Fatalf("valid incomplete response was rejected: payload %q, error %v", payload, readErr)
+			}
+		})
+	}
+}
+
 func TestForwardAccountRejectsResidualContentEncoding(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Encoding", "br")

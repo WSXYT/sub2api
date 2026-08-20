@@ -20,8 +20,8 @@ func TestAccount_BillingRateMultiplier_UsesRelayEffectiveRate(t *testing.T) {
 	account := Account{
 		RateMultiplier: &manual,
 		Extra: map[string]any{
-			relayAccountMarkerKey:  true,
-			"relay_effective_rate": 0.2,
+			relayAccountMarkerKey:   true,
+			"relay_effective_rate":  0.2,
 			"relay_rate_updated_at": time.Now().Format(time.RFC3339Nano),
 		},
 	}

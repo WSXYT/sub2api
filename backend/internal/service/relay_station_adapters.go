@@ -1200,7 +1200,7 @@ func relaySSEErrorEvent(event []byte) bool {
 		case bytes.HasPrefix(trimmed, []byte("event:")):
 			hasFrame = true
 			eventName := strings.ToLower(strings.TrimSpace(string(bytes.TrimPrefix(trimmed, []byte("event:")))))
-			if eventName == "error" || strings.Contains(eventName, "failed") || strings.Contains(eventName, "incomplete") || strings.Contains(eventName, "cancel") {
+			if eventName == "error" || strings.Contains(eventName, "failed") {
 				return true
 			}
 		case bytes.HasPrefix(trimmed, []byte("data:")):
@@ -1226,9 +1226,7 @@ func relayJSONErrorPayload(payload []byte) bool {
 	typeName := strings.ToLower(strings.TrimSpace(parsed.Get("type").String()))
 	status := strings.ToLower(strings.TrimSpace(parsed.Get("response.status").String()))
 	return parsed.Get("error").Exists() || parsed.Get("response.error").Exists() ||
-		typeName == "error" || strings.Contains(typeName, "failed") ||
-		strings.Contains(typeName, "incomplete") || strings.Contains(typeName, "cancel") ||
-		status == "failed" || status == "incomplete" || status == "cancelled" || status == "canceled"
+		typeName == "error" || strings.Contains(typeName, "failed") || status == "failed"
 }
 
 func relayGenericSSEError(path string) []byte {

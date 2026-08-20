@@ -158,9 +158,9 @@ func TestProfitControl_AccountRateSemantics(t *testing.T) {
 
 	relayRate := 0.3
 	relay := &Account{
-		ID:            5,
-		Platform:      PlatformOpenAI,
-		Type:          "relay",
+		ID:             5,
+		Platform:       PlatformOpenAI,
+		Type:           "relay",
 		RateMultiplier: &relayRate,
 		Extra: map[string]any{
 			relayAccountMarkerKey:   true,
@@ -168,7 +168,7 @@ func TestProfitControl_AccountRateSemantics(t *testing.T) {
 			"relay_rate_updated_at": now.Format(time.RFC3339Nano),
 		},
 	}
-	vetoed, reason = openAIProfitControlVetoReason(gateCtx, relay)
+	vetoed, _ = openAIProfitControlVetoReason(gateCtx, relay)
 	require.False(t, vetoed, "relay profit control must use the refreshed effective rate")
 	relay.Extra["relay_effective_rate"] = 0.8
 	vetoed, reason = openAIProfitControlVetoReason(gateCtx, relay)
