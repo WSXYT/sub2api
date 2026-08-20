@@ -119,6 +119,33 @@ func TestPreviewProfitAdmissionAssumeEnabled(t *testing.T) {
 		"账号倍率 0.9 > 阈值 0.5，探测快照的低倍率不能替代账号倍率")
 }
 
+func TestPreviewProfitAdmissionUsesRelayEffectiveRate(t *testing.T) {
+	manualRate := 0.9
+	relay := &Account{
+		ID:             52,
+		Name:           "relay",
+		Platform:       PlatformOpenAI,
+		Type:           "relay",
+		RateMultiplier: &manualRate,
+		Extra: map[string]any{
+			relayAccountMarkerKey:   true,
+			"relay_effective_rate":  0.2,
+			"relay_rate_updated_at": time.Now().Format(time.RFC3339Nano),
+		},
+	}
+	group := profitControlTestGroup(52, 0.5, 0)
+	report := PreviewProfitAdmission([]ProfitPreviewGroupInput{{
+		Group:    group,
+		Accounts: []*Account{relay},
+		Models:   []string{"gpt-test"},
+	}}, time.Now())[0]
+
+	verdict := report.Verdicts[0]
+	require.Equal(t, ProfitPreviewClassAdmitted, verdict.Class)
+	require.NotNil(t, verdict.AccountRate)
+	require.InDelta(t, 0.2, *verdict.AccountRate, 1e-12)
+}
+
 func TestPreviewProfitAdmissionSupportsFivePlatforms(t *testing.T) {
 	for i, platform := range []string{
 		PlatformOpenAI,

@@ -1943,7 +1943,7 @@ func (s *AccountTestService) testRelayAccountConnection(c *gin.Context, account 
 	}
 	route, err := s.relayStationService.ResolveRouteForAccount(c.Request.Context(), account, groupID)
 	if err != nil {
-		return s.sendErrorAndEnd(c, fmt.Sprintf("Relay route is unavailable: %s", err.Error()))
+		return s.sendErrorAndEnd(c, "Relay route is unavailable")
 	}
 
 	c.Writer.Header().Set("Content-Type", "text/event-stream")
@@ -1964,12 +1964,11 @@ func (s *AccountTestService) testRelayAccountConnection(c *gin.Context, account 
 	inbound.Header.Set("Accept", "text/event-stream")
 	resp, err := s.relayStationService.ForwardAccount(c.Request.Context(), account, route, inbound)
 	if err != nil {
-		return s.sendErrorAndEnd(c, fmt.Sprintf("Relay request failed: %s", err.Error()))
+		return s.sendErrorAndEnd(c, "Upstream request failed")
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return s.sendErrorAndEnd(c, fmt.Sprintf("Relay returned %d: %s", resp.StatusCode, string(body)))
+		return s.sendErrorAndEnd(c, "Upstream request failed")
 	}
 	return s.processOpenAIChatCompletionsStream(c, resp.Body)
 }

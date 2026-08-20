@@ -32,7 +32,29 @@ var (
 	ErrRelayStationNotFound = infraerrors.NotFound("RELAY_STATION_NOT_FOUND", "relay station not found")
 	ErrRelayRouteNotFound   = errors.New("relay route is not configured")
 	ErrRelayRateUnavailable = infraerrors.New(http.StatusBadGateway, "RELAY_RATE_UNAVAILABLE", "no relay source has a current price")
+	ErrRelayUpstreamFailed  = errors.New("upstream request failed")
 )
+
+type relayUpstreamError struct {
+	statusCode int
+}
+
+func (e *relayUpstreamError) Error() string { return ErrRelayUpstreamFailed.Error() }
+func (e *relayUpstreamError) Unwrap() error { return ErrRelayUpstreamFailed }
+
+func relayUpstreamFailure(statusCode int) error {
+	return &relayUpstreamError{statusCode: statusCode}
+}
+
+// RelayUpstreamStatus returns internal retry metadata without exposing the
+// upstream response body, headers, URL, or provider identity.
+func RelayUpstreamStatus(err error) (int, bool) {
+	var upstreamErr *relayUpstreamError
+	if !errors.As(err, &upstreamErr) || upstreamErr.statusCode < 100 || upstreamErr.statusCode > 599 {
+		return 0, false
+	}
+	return upstreamErr.statusCode, true
+}
 
 // RelayStationType identifies an upstream relay implementation.
 type RelayStationType string
@@ -291,9 +313,10 @@ type RelayStationService struct {
 	usage       *UsageService
 	cfg         *config.Config
 
-	loadMu sync.Mutex
-	mu     sync.RWMutex
-	loaded bool
+	loadMu       sync.Mutex
+	nativeSyncMu sync.Mutex
+	mu           sync.RWMutex
+	loaded       bool
 
 	// Each AIHub station owns a distinct aihub-auto instance. The mutex only
 	// serializes its initial login; proxy requests stay fully concurrent.
@@ -340,11 +363,16 @@ func relayNativeAccountIdentity(group *Group) (platform, accountType string) {
 	if group == nil {
 		return PlatformOpenAI, "relay"
 	}
-	platform = NormalizeOpenAICompatiblePlatform(group.Platform)
-	if platform != PlatformOpenAI {
-		return platform, AccountTypeAPIKey
+	switch group.Platform {
+	case PlatformAntigravity:
+		return PlatformAntigravity, AccountTypeOAuth
+	case PlatformAnthropic, PlatformGemini, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek:
+		return group.Platform, AccountTypeAPIKey
+	case PlatformOpenAI:
+		return PlatformOpenAI, "relay"
+	default:
+		return PlatformOpenAI, "relay"
 	}
-	return platform, "relay"
 }
 
 // SyncNativeRelayAccounts creates the native Account identities represented by
@@ -357,6 +385,8 @@ func (s *RelayStationService) SyncNativeRelayAccounts(ctx context.Context) error
 	if s.groupRepo == nil {
 		return infraerrors.New(http.StatusInternalServerError, "RELAY_GROUP_REPOSITORY_UNAVAILABLE", "relay group repository is unavailable")
 	}
+	s.nativeSyncMu.Lock()
+	defer s.nativeSyncMu.Unlock()
 	if err := s.ensureLoaded(ctx); err != nil {
 		return err
 	}
@@ -388,6 +418,9 @@ func (s *RelayStationService) SyncNativeRelayAccounts(ctx context.Context) error
 		key := account.GetExtraString(relayAccountKeyKey)
 		existingByKey[key] = append(existingByKey[key], account)
 	}
+	for key := range existingByKey {
+		sort.Slice(existingByKey[key], func(i, j int) bool { return existingByKey[key][i].ID < existingByKey[key][j].ID })
+	}
 	for _, binding := range bindings {
 		group, err := s.groupRepo.GetByID(ctx, binding.GroupID)
 		if err != nil {
@@ -400,20 +433,33 @@ func (s *RelayStationService) SyncNativeRelayAccounts(ctx context.Context) error
 				continue
 			}
 			key := relayAccountKey(station.ID, binding.GroupID, source.SourceGroup)
-			for _, account := range existingByKey[key] {
+			accounts := existingByKey[key]
+			if len(accounts) > 0 {
+				account := accounts[0]
 				account.Name = fmt.Sprintf("%s / %s", station.Name, source.SourceGroup)
 				account.Platform = platform
 				account.Type = accountType
 				account.Priority = relayNativePriority(source.Priority)
 				account.Schedulable = source.Enabled && station.Enabled
+				if account.Extra == nil {
+					account.Extra = make(map[string]any)
+				}
+				account.Extra[relayAccountMarkerKey] = true
+				account.Extra[relayAccountKeyKey] = key
+				account.Extra[relayStationIDKey] = station.ID
+				account.Extra[relayGroupIDKey] = binding.GroupID
+				account.Extra[relaySourceGroupKey] = source.SourceGroup
 				if err := s.accountRepo.Update(ctx, &account); err != nil {
 					return err
 				}
 				if err := s.accountRepo.BindGroups(ctx, account.ID, []int64{binding.GroupID}); err != nil {
 					return err
 				}
-			}
-			if len(existingByKey[key]) > 0 {
+				for _, duplicate := range accounts[1:] {
+					if err := s.accountRepo.SetSchedulable(ctx, duplicate.ID, false); err != nil {
+						return err
+					}
+				}
 				continue
 			}
 			account := &Account{
@@ -446,7 +492,7 @@ func (s *RelayStationService) SyncNativeRelayAccounts(ctx context.Context) error
 			}
 		}
 	}
-	return nil
+	return s.syncNativeRelayRates(ctx, s.snapshotConfig(), s.snapshotRates())
 }
 
 func relayAccountKey(stationID string, groupID int64, sourceGroup string) string {
@@ -478,10 +524,7 @@ func (s *RelayStationService) UpdateRelayAccountNativePriority(ctx context.Conte
 }
 
 func (s *RelayStationService) syncNativeRelayState(ctx context.Context) error {
-	if err := s.SyncNativeRelayAccounts(ctx); err != nil {
-		return err
-	}
-	return s.syncNativeRelayRates(ctx, s.snapshotConfig(), s.snapshotRates())
+	return s.SyncNativeRelayAccounts(ctx)
 }
 
 // Start begins best-effort periodic rate polling and aihub configuration sync.
@@ -911,6 +954,18 @@ func (s *RelayStationService) UpdateBindings(ctx context.Context, bindings []Rel
 	if err := s.ensureLoaded(ctx); err != nil {
 		return nil, err
 	}
+	if s.groupRepo == nil {
+		return nil, infraerrors.New(http.StatusInternalServerError, "RELAY_GROUP_REPOSITORY_UNAVAILABLE", "relay group repository is unavailable")
+	}
+	for _, binding := range bindings {
+		group, err := s.groupRepo.GetByID(ctx, binding.GroupID)
+		if err != nil {
+			return nil, err
+		}
+		if group == nil {
+			return nil, infraerrors.NotFound("RELAY_GROUP_NOT_FOUND", "relay group not found")
+		}
+	}
 
 	s.mu.Lock()
 	candidate := cloneRelayConfig(s.config)
@@ -951,11 +1006,11 @@ func (s *RelayStationService) TestStation(ctx context.Context, id string) ([]Rel
 	}
 	if len(relayRequiredSourceGroups(snapshot, id)[id]) == 0 {
 		if _, err := s.fetchStationRates(ctx, station, map[string]struct{}{"default": {}}); err != nil {
-			return nil, infraerrors.New(http.StatusBadGateway, "RELAY_TEST_FAILED", err.Error())
+			return nil, relayTestFailure(id, err)
 		}
 	}
 	if err := s.refreshRates(ctx, id); err != nil {
-		return nil, infraerrors.New(http.StatusBadGateway, "RELAY_TEST_FAILED", err.Error())
+		return nil, relayTestFailure(id, err)
 	}
 	return s.ListRatesForStation(ctx, id)
 }
@@ -1060,8 +1115,10 @@ func (s *RelayStationService) syncNativeRelayRates(ctx context.Context, snapshot
 				"relay_model_capability_known": station.Type == RelayStationTypeAIHub && rate.SupportedModels != nil,
 				"relay_supported_models":       rate.SupportedModels,
 			}
-			if effective, ok := relayEffectiveRate(rate, source); ok {
-				updates["relay_effective_rate"] = effective
+			if rateReadyForRoute(rate, time.Now()) {
+				if effective, ok := relayEffectiveRate(rate, source); ok {
+					updates["relay_effective_rate"] = effective
+				}
 			}
 			for _, account := range accounts {
 				if err := s.accountRepo.UpdateExtra(ctx, account.ID, updates); err != nil {
@@ -1266,6 +1323,7 @@ func (s *RelayStationService) ResolveRouteForAccount(ctx context.Context, accoun
 		if !ok {
 			return nil, ErrRelayRateUnavailable
 		}
+		account.setRelayEffectiveRate(effectiveRate, rate.UpdatedAt)
 		return &RelayRoute{station: station, source: source, effectiveRate: effectiveRate}, nil
 	}
 	return nil, ErrRelayRouteNotFound

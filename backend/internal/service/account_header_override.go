@@ -76,7 +76,7 @@ func (a *Account) IsHeaderOverrideEligible() bool {
 	if a == nil {
 		return false
 	}
-	if a.IsRelay() && a.IsOpenAICompatible() {
+	if a.IsRelay() {
 		return true
 	}
 	switch a.Platform {

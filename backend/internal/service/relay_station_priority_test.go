@@ -14,13 +14,23 @@ type relayGroupMultiplierRepo struct {
 
 type relayNativeAccountRepo struct {
 	AccountRepository
-	accounts []Account
-	updates  []Account
-	bindings map[int64][]int64
+	accounts     []Account
+	updates      []Account
+	bindings     map[int64][]int64
+	unscheduled  []int64
+	extraUpdates map[int64]map[string]any
 }
 
-func (r *relayNativeAccountRepo) FindByExtraField(_ context.Context, _ string, _ any) ([]Account, error) {
-	return append([]Account(nil), r.accounts...), nil
+type relaySettingRepo struct{ SettingRepository }
+
+func (r *relayNativeAccountRepo) FindByExtraField(_ context.Context, field string, value any) ([]Account, error) {
+	result := make([]Account, 0, len(r.accounts))
+	for _, account := range r.accounts {
+		if account.Extra != nil && account.Extra[field] == value {
+			result = append(result, account)
+		}
+	}
+	return result, nil
 }
 
 func (r *relayNativeAccountRepo) Update(_ context.Context, account *Account) error {
@@ -42,6 +52,21 @@ func (r *relayNativeAccountRepo) BindGroups(_ context.Context, accountID int64, 
 	return nil
 }
 
+func (r *relayNativeAccountRepo) SetSchedulable(_ context.Context, accountID int64, schedulable bool) error {
+	if !schedulable {
+		r.unscheduled = append(r.unscheduled, accountID)
+	}
+	return nil
+}
+
+func (r *relayNativeAccountRepo) UpdateExtra(_ context.Context, accountID int64, updates map[string]any) error {
+	if r.extraUpdates == nil {
+		r.extraUpdates = make(map[int64]map[string]any)
+	}
+	r.extraUpdates[accountID] = updates
+	return nil
+}
+
 func (r *relayGroupMultiplierRepo) GetByID(_ context.Context, id int64) (*Group, error) {
 	group, found := r.groups[id]
 	if !found {
@@ -58,15 +83,20 @@ func (r *relayGroupMultiplierRepo) Update(_ context.Context, group *Group) error
 	return nil
 }
 
-func TestRelayNativeAccountIdentityUsesPlatformAPIKeys(t *testing.T) {
-	for _, platform := range []string{PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek} {
+func TestRelayNativeAccountIdentityPreservesGroupPlatform(t *testing.T) {
+	for _, platform := range []string{PlatformAnthropic, PlatformGemini, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek} {
 		gotPlatform, accountType := relayNativeAccountIdentity(&Group{Platform: platform})
 		if gotPlatform != platform || accountType != AccountTypeAPIKey {
 			t.Fatalf("%s relay identity = %s/%s, want %s/%s", platform, gotPlatform, accountType, platform, AccountTypeAPIKey)
 		}
 	}
 
-	platform, accountType := relayNativeAccountIdentity(&Group{Platform: PlatformOpenAI})
+	platform, accountType := relayNativeAccountIdentity(&Group{Platform: PlatformAntigravity})
+	if platform != PlatformAntigravity || accountType != AccountTypeOAuth {
+		t.Fatalf("antigravity relay identity = %s/%s, want %s/%s", platform, accountType, PlatformAntigravity, AccountTypeOAuth)
+	}
+
+	platform, accountType = relayNativeAccountIdentity(&Group{Platform: PlatformOpenAI})
 	if platform != PlatformOpenAI || accountType != "relay" {
 		t.Fatalf("openai relay identity = %s/%s, want %s/relay", platform, accountType, PlatformOpenAI)
 	}
@@ -95,6 +125,7 @@ func TestSyncNativeRelayAccountsMigratesExistingRelayIdentity(t *testing.T) {
 				groupID: {ID: groupID, Platform: platform},
 			}}
 			service := &RelayStationService{
+				settingRepo: &relaySettingRepo{},
 				accountRepo: accountRepo,
 				groupRepo:   groupRepo,
 				loaded:      true,
@@ -123,6 +154,51 @@ func TestSyncNativeRelayAccountsMigratesExistingRelayIdentity(t *testing.T) {
 				t.Fatalf("group binding = %v, want [%d]", groups, groupID)
 			}
 		})
+	}
+}
+
+func TestSyncNativeRelayAccountsDisablesDuplicateIdentity(t *testing.T) {
+	const groupID int64 = 9
+	key := relayAccountKey("station", groupID, "source")
+	accountRepo := &relayNativeAccountRepo{accounts: []Account{
+		{ID: 10, Extra: map[string]any{relayAccountMarkerKey: true, relayAccountKeyKey: key}},
+		{ID: 11, Extra: map[string]any{relayAccountMarkerKey: true, relayAccountKeyKey: key}},
+	}}
+	service := &RelayStationService{
+		settingRepo: &relaySettingRepo{},
+		accountRepo: accountRepo,
+		groupRepo:   &relayGroupMultiplierRepo{groups: map[int64]*Group{groupID: {ID: groupID, Platform: PlatformOpenAI}}},
+		loaded:      true,
+		config: relayStationConfig{
+			Stations: []relayStation{{ID: "station", Name: "station", Enabled: true}},
+			Bindings: []RelayGroupBinding{{GroupID: groupID, Sources: []RelayStationSource{{StationID: "station", SourceGroup: "source", Enabled: true}}}},
+		},
+	}
+
+	if err := service.SyncNativeRelayAccounts(context.Background()); err != nil {
+		t.Fatalf("sync relay accounts: %v", err)
+	}
+	if len(accountRepo.updates) != 1 || accountRepo.updates[0].ID != 10 {
+		t.Fatalf("canonical updates = %#v, want only account 10", accountRepo.updates)
+	}
+	if len(accountRepo.unscheduled) != 1 || accountRepo.unscheduled[0] != 11 {
+		t.Fatalf("disabled duplicates = %v, want [11]", accountRepo.unscheduled)
+	}
+}
+
+func TestUpdateRelayBindingsRejectsMissingGroupBeforePersistence(t *testing.T) {
+	service := &RelayStationService{
+		settingRepo: &relaySettingRepo{},
+		groupRepo:   &relayGroupMultiplierRepo{groups: map[int64]*Group{}},
+		loaded:      true,
+		config:      relayStationConfig{Bindings: []RelayGroupBinding{{GroupID: 1}}},
+	}
+	_, err := service.UpdateBindings(context.Background(), []RelayGroupBinding{{GroupID: 404}})
+	if err == nil {
+		t.Fatal("missing relay group was accepted")
+	}
+	if len(service.config.Bindings) != 1 || service.config.Bindings[0].GroupID != 1 {
+		t.Fatalf("invalid binding mutated persisted config: %#v", service.config.Bindings)
 	}
 }
 

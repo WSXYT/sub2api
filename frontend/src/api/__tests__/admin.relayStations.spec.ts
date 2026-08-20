@@ -65,7 +65,9 @@ describe("admin relay stations API", () => {
 			aihub_synced: false,
 			aihub_sync_error: "AIHub: connection refused",
 		});
-		expect(put).toHaveBeenCalledWith("/admin/relay-stations/bindings", { bindings: [] });
+		expect(put).toHaveBeenCalledWith("/admin/relay-stations/bindings", {
+			bindings: [],
+		});
 	});
 
 	it("lists and updates relay accounts through the relay API", async () => {
@@ -102,7 +104,9 @@ describe("admin relay stations API", () => {
 		expect(
 			effectiveRelayRate({ ...readyRate, rate: 0.12 }, 0.02, 0.1),
 		).toBeNull();
-		expect(effectiveRelayRate({ ...readyRate, rate: 0.09 }, 0.02, 0.1, false)).toBeCloseTo(0.09);
+		expect(
+			effectiveRelayRate({ ...readyRate, rate: 0.09 }, 0.02, 0.1, false),
+		).toBeCloseTo(0.09);
 	});
 
 	it("uses the next midnight as the exclusive profit end", () => {

@@ -260,7 +260,23 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 		}
 		var result *service.ForwardResult
 		setActualUpstreamEndpoint(c, "")
-		if shouldUseAntigravityCompat(account) {
+		if account.IsRelay() {
+			upstreamModel := reqModel
+			if channelMapping.Mapped {
+				upstreamModel = channelMapping.MappedModel
+			}
+			if mappedModel := account.GetMappedModel(upstreamModel); mappedModel != upstreamModel {
+				forwardBody = h.gatewayService.ReplaceModelInBody(forwardBody, mappedModel)
+				upstreamModel = mappedModel
+			}
+			result, err = h.forwardRelayAccount(requestCtx, c, account, derefGroupID(apiKey.GroupID), relayGatewayForwardInput{
+				Body:          forwardBody,
+				Path:          c.Request.URL.Path,
+				OriginalModel: reqModel,
+				UpstreamModel: upstreamModel,
+				Stream:        reqStream,
+			}, &streamStarted)
+		} else if shouldUseAntigravityCompat(account) {
 			if h.antigravityGatewayService == nil {
 				h.responsesErrorResponse(c, http.StatusBadGateway, "upstream_error", "Antigravity compatibility service is not configured")
 				if accountReleaseFunc != nil {

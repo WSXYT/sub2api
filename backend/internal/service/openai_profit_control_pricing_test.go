@@ -156,6 +156,25 @@ func TestProfitControl_AccountRateSemantics(t *testing.T) {
 	vetoed, _ = openAIProfitControlVetoReason(gateCtx, manualOAuth)
 	require.False(t, vetoed, "手工维护的 OAuth 倍率应正常准入")
 
+	relayRate := 0.3
+	relay := &Account{
+		ID:            5,
+		Platform:      PlatformOpenAI,
+		Type:          "relay",
+		RateMultiplier: &relayRate,
+		Extra: map[string]any{
+			relayAccountMarkerKey:   true,
+			"relay_effective_rate":  0.2,
+			"relay_rate_updated_at": now.Format(time.RFC3339Nano),
+		},
+	}
+	vetoed, reason = openAIProfitControlVetoReason(gateCtx, relay)
+	require.False(t, vetoed, "relay profit control must use the refreshed effective rate")
+	relay.Extra["relay_effective_rate"] = 0.8
+	vetoed, reason = openAIProfitControlVetoReason(gateCtx, relay)
+	require.True(t, vetoed)
+	require.Equal(t, openAIProfitFilterReasonThreshold, reason)
+
 	vetoed, reason = openAIProfitControlVetoReason(gateCtx, expensive)
 	require.True(t, vetoed)
 	require.Equal(t, openAIProfitFilterReasonThreshold, reason)

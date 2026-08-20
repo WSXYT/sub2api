@@ -162,6 +162,47 @@ func TestAdminServiceUpdateAccountPreservesOpenAILongContextBillingOptOutWhenOmi
 	require.Equal(t, false, account.Extra[openAILongContextBillingEnabledKey])
 }
 
+func TestAdminServiceUpdateAccountPreservesRelayManagedExtra(t *testing.T) {
+	repo := &longContextBillingRepoStub{account: &Account{
+		ID:       1,
+		Platform: PlatformOpenAI,
+		Type:     "relay",
+		Extra: map[string]any{
+			relayAccountMarkerKey:  true,
+			relayAccountKeyKey:     "station:1:source",
+			relayStationIDKey:      "station",
+			relayGroupIDKey:        int64(1),
+			relaySourceGroupKey:    "source",
+			"relay_effective_rate": 0.2,
+		},
+	}}
+	svc := &adminServiceImpl{accountRepo: repo}
+
+	account, err := svc.UpdateAccount(context.Background(), 1, &UpdateAccountInput{Extra: map[string]any{"user_note": "kept"}})
+
+	require.NoError(t, err)
+	require.True(t, account.IsRelay())
+	require.Equal(t, "station", account.RelayStationID())
+	require.Equal(t, "source", account.RelaySourceGroup())
+	require.Equal(t, "kept", account.Extra["user_note"])
+}
+
+func TestAdminServiceBulkUpdateRejectsRelayManagedFields(t *testing.T) {
+	relay := &Account{ID: 1, Extra: map[string]any{relayAccountMarkerKey: true}}
+	repo := &longContextBillingRepoStub{account: relay, accounts: []*Account{relay}}
+	svc := &adminServiceImpl{accountRepo: repo}
+	schedulable := false
+
+	_, err := svc.BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
+		AccountIDs:  []int64{relay.ID},
+		Extra:       map[string]any{},
+		Schedulable: &schedulable,
+	})
+
+	require.Error(t, err)
+	require.Zero(t, repo.bulkUpdateCalls)
+}
+
 func TestAdminServiceUpdateAccountAllowsExplicitCodexImportOptIn(t *testing.T) {
 	repo := &longContextBillingRepoStub{account: &Account{
 		ID:          1,

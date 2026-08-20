@@ -121,29 +121,6 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 	embPricingCtx, pricingAt := h.gatewayService.WithOpenAIRequestPricingContext(c.Request.Context(), apiKey.GroupID)
 	c.Request = c.Request.WithContext(embPricingCtx)
 
-	relayBody := body
-	relayUpstreamModel := reqModel
-	if channelMapping.Mapped {
-		relayBody = h.gatewayService.ReplaceModelInBody(body, channelMapping.MappedModel)
-		relayUpstreamModel = channelMapping.MappedModel
-	}
-	if h.tryRelayOpenAIForward(c, relayOpenAIForwardInput{
-		APIKey:               apiKey,
-		Subscription:         subscription,
-		Body:                 relayBody,
-		OriginalModel:        reqModel,
-		UpstreamModel:        relayUpstreamModel,
-		SessionHash:          h.gatewayService.GenerateExplicitSessionHash(c, body),
-		PricingAt:            pricingAt,
-		ChannelUsageFields:   clientRequestedUsageFields(c, channelMapping, reqModel, relayUpstreamModel),
-		RequiredCapability:   service.OpenAIEndpointCapabilityEmbeddings,
-		RequiredTransport:    service.OpenAIUpstreamTransportHTTPSSE,
-		RequestPlatform:      service.PlatformOpenAI,
-		UseUpstreamTokenCost: true,
-	}, &streamStarted) {
-		return
-	}
-
 	for {
 		selection, _, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
 			c.Request.Context(),
@@ -220,6 +197,22 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 					accountReleaseFunc()
 				}
 			}()
+			if account.IsRelay() {
+				upstreamModel := reqModel
+				if channelMapping.Mapped {
+					upstreamModel = channelMapping.MappedModel
+				}
+				if mappedModel := account.GetMappedModel(upstreamModel); mappedModel != upstreamModel {
+					forwardBody = h.gatewayService.ReplaceModelInBody(forwardBody, mappedModel)
+					upstreamModel = mappedModel
+				}
+				return h.forwardRelayOpenAIAccount(c.Request.Context(), c, account, derefGroupID(apiKey.GroupID), relayGatewayForwardInput{
+					Body:          forwardBody,
+					Path:          c.Request.URL.Path,
+					OriginalModel: reqModel,
+					UpstreamModel: upstreamModel,
+				}, &streamStarted)
+			}
 			return h.gatewayService.ForwardEmbeddings(c.Request.Context(), c, account, forwardBody, "")
 		}()
 

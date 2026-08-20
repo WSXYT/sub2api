@@ -3534,6 +3534,11 @@ func TestDefaultOpenAIAccountScheduler_IsAccountTransportCompatible_Branches(t *
 	require.True(t, scheduler.isAccountTransportCompatible(account, OpenAIUpstreamTransportResponsesWebsocketV2))
 	require.True(t, scheduler.isAccountTransportCompatible(account, OpenAIUpstreamTransportResponsesWebsocketV2Ingress))
 
+	relay := *account
+	relay.Type = "relay"
+	relay.Extra = map[string]any{relayAccountMarkerKey: true}
+	require.False(t, scheduler.isAccountTransportCompatible(&relay, OpenAIUpstreamTransportResponsesWebsocketV2Ingress))
+
 	cfg.Gateway.OpenAIWS.ModeRouterV2Enabled = true
 	account.Extra["openai_apikey_responses_websockets_v2_mode"] = OpenAIWSIngressModeHTTPBridge
 	require.False(t, scheduler.isAccountTransportCompatible(account, OpenAIUpstreamTransportResponsesWebsocketV2))
@@ -3711,6 +3716,7 @@ func TestOpenAIEligibilitySkipsRelayWithoutEffectiveRate(t *testing.T) {
 	}
 
 	relay.Extra["relay_effective_rate"] = 0.1
+	relay.Extra["relay_rate_updated_at"] = time.Now().Format(time.RFC3339Nano)
 	if !isOpenAICompatibleAccountEligibleForRequest(context.Background(), relay, PlatformOpenAI, "", false, "") {
 		t.Fatal("relay account with an effective rate was unexpectedly excluded")
 	}

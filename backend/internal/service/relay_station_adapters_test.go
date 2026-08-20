@@ -3,9 +3,13 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 )
@@ -26,6 +30,8 @@ func TestRelayProxyTargetNormalizesOpenAIAliases(t *testing.T) {
 		{base: "https://relay.example", path: "/responses", want: "https://relay.example/v1/responses"},
 		{base: "https://relay.example/v1", path: "/v1/chat/completions", want: "https://relay.example/v1/chat/completions"},
 		{base: "https://relay.example/openai/v1", path: "/v1/embeddings", want: "https://relay.example/openai/v1/embeddings"},
+		{base: "https://relay.example/v1", path: "/v1beta/models/gemini-pro:generateContent", want: "https://relay.example/v1beta/models/gemini-pro:generateContent"},
+		{base: "https://relay.example", path: "/v1beta/models/gemini-pro:generateContent", want: "https://relay.example/v1beta/models/gemini-pro:generateContent"},
 		{base: "https://relay.example", path: "/backend-api/codex/responses", want: "https://relay.example/v1/responses"},
 	}
 	for _, test := range tests {
@@ -36,6 +42,225 @@ func TestRelayProxyTargetNormalizesOpenAIAliases(t *testing.T) {
 		if got != test.want {
 			t.Fatalf("relayProxyTarget(%q, %q) = %q, want %q", test.base, test.path, got, test.want)
 		}
+	}
+}
+
+func TestForwardAccountHidesUpstreamErrors(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-Upstream-Provider", "secret-provider")
+		w.WriteHeader(http.StatusTeapot)
+		_, _ = w.Write([]byte(`{"error":"secret upstream details"}`))
+	}))
+	defer upstream.Close()
+
+	service := &RelayStationService{}
+	inbound, _ := http.NewRequest(http.MethodPost, "http://sub2api.test/v1/chat/completions", nil)
+	response, err := service.ForwardAccount(context.Background(), &Account{}, &RelayRoute{
+		station: relayStation{ID: "private", Type: RelayStationTypeSub2API, BaseURL: upstream.URL, ProxyToken: "token"},
+		source:  RelayStationSource{SourceGroup: "default"},
+	}, inbound)
+	if response != nil || !errors.Is(err, ErrRelayUpstreamFailed) {
+		t.Fatalf("ForwardAccount() = response %#v, error %v; want hidden upstream failure", response, err)
+	}
+	if strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "418") || strings.Contains(err.Error(), "private") {
+		t.Fatalf("ForwardAccount() exposed upstream details: %q", err.Error())
+	}
+	statusCode, ok := RelayUpstreamStatus(err)
+	if !ok || statusCode != http.StatusTeapot {
+		t.Fatalf("ForwardAccount() lost internal retry status: %d, %v", statusCode, ok)
+	}
+}
+
+func TestRelayTestFailureHidesUpstreamDetails(t *testing.T) {
+	err := relayTestFailure("private", errors.New("secret-provider at https://secret.example"))
+	if strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "private") {
+		t.Fatalf("relay test exposed upstream details: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "relay station test failed") {
+		t.Fatalf("relay test did not return its generic failure: %q", err.Error())
+	}
+}
+
+func TestForwardAccountRejectsOversizedUnlabeledResponses(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = io.WriteString(w, strings.Repeat("x", relayResponseSanitizeLimit+1))
+	}))
+	defer upstream.Close()
+
+	service := &RelayStationService{}
+	inbound, _ := http.NewRequest(http.MethodPost, "http://sub2api.test/v1/chat/completions", nil)
+	response, err := service.ForwardAccount(context.Background(), &Account{}, &RelayRoute{
+		station: relayStation{ID: "private", Type: RelayStationTypeSub2API, BaseURL: upstream.URL, ProxyToken: "token"},
+		source:  RelayStationSource{SourceGroup: "default"},
+	}, inbound)
+	if response != nil || !errors.Is(err, ErrRelayUpstreamFailed) {
+		t.Fatalf("ForwardAccount() = response %#v, error %v; want hidden upstream failure", response, err)
+	}
+}
+
+func TestRelaySanitizedSSEBodyRejectsOversizedEvent(t *testing.T) {
+	body := io.NopCloser(strings.NewReader("data: " + strings.Repeat("x", relaySSEEventLimit) + "\n\n"))
+	payload, err := io.ReadAll(newRelaySanitizedSSEBody(body, "/v1/chat/completions", "private"))
+	if !errors.Is(err, ErrRelayUpstreamFailed) {
+		t.Fatalf("read sanitized stream: %v", err)
+	}
+	if strings.Contains(string(payload), strings.Repeat("x", 64)) || !strings.Contains(string(payload), "Upstream request failed") {
+		t.Fatalf("oversized stream was not sanitized: %q", payload)
+	}
+}
+
+func TestForwardAccountHidesSuccessfulStatusErrorPayloads(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		contentType string
+		body        string
+		path        string
+		stream      bool
+		wantError   bool
+	}{
+		{
+			name:        "json",
+			contentType: "application/json",
+			body:        `{"error":{"message":"secret-provider at https://secret.example"}}`,
+			path:        "/v1/chat/completions",
+			wantError:   true,
+		},
+		{
+			name:        "mislabeled json",
+			contentType: "text/plain",
+			body:        `{"error":{"message":"secret-provider at https://secret.example"}}`,
+			path:        "/v1/chat/completions",
+			wantError:   true,
+		},
+		{
+			name:        "plain html diagnostic",
+			contentType: "text/html",
+			body:        `<html>secret-provider at https://secret.example</html>`,
+			path:        "/v1/chat/completions",
+			wantError:   true,
+		},
+		{
+			name:        "responses incomplete",
+			contentType: "application/json",
+			body:        `{"type":"response.incomplete","response":{"status":"incomplete","error":{"message":"secret-provider"}}}`,
+			path:        "/v1/responses",
+			wantError:   true,
+		},
+		{
+			name:        "mislabeled sse",
+			contentType: "text/plain",
+			body:        "event: error\ndata: {\"error\":{\"message\":\"secret-provider\"}}\n\n",
+			path:        "/v1/chat/completions",
+			stream:      true,
+		},
+		{
+			name:        "openai sse",
+			contentType: "text/event-stream",
+			body:        "event: error\ndata: {\"type\":\"error\",\"error\":{\"message\":\"secret-provider at https://secret.example\"}}\n\n",
+			path:        "/v1/chat/completions",
+		},
+		{
+			name:        "sse raw json error",
+			contentType: "text/event-stream",
+			body:        `{"error":{"message":"secret-provider at https://secret.example"}}`,
+			path:        "/v1/chat/completions",
+		},
+		{
+			name:        "anthropic sse",
+			contentType: "text/event-stream",
+			body:        "event: error\ndata: {\"type\":\"error\",\"error\":{\"message\":\"secret-provider at https://secret.example\"}}\n\n",
+			path:        "/v1/messages",
+		},
+		{
+			name:        "late sse error",
+			contentType: "text/event-stream",
+			body:        "data: {\"choices\":[{\"delta\":{\"content\":\"safe\"}}]}\n\nevent: error\ndata: {\"error\":{\"message\":\"secret-provider\"}}\n\n",
+			path:        "/v1/chat/completions",
+		},
+		{
+			name:        "gemini sse",
+			contentType: "text/event-stream",
+			body:        "data: {\"error\":{\"message\":\"secret-provider at https://secret.example\"}}\n\n",
+			path:        "/v1beta/models/gemini-pro:streamGenerateContent",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", test.contentType)
+				_, _ = w.Write([]byte(test.body))
+			}))
+			defer upstream.Close()
+
+			service := &RelayStationService{}
+			inbound, _ := http.NewRequest(http.MethodPost, "http://sub2api.test"+test.path, nil)
+			if test.stream {
+				inbound.Header.Set("Accept", "text/event-stream")
+			}
+			response, err := service.ForwardAccount(context.Background(), &Account{}, &RelayRoute{
+				station: relayStation{ID: "private", Type: RelayStationTypeSub2API, BaseURL: upstream.URL, ProxyToken: "token"},
+				source:  RelayStationSource{SourceGroup: "default"},
+			}, inbound)
+			if test.wantError {
+				if response != nil || !errors.Is(err, ErrRelayUpstreamFailed) {
+					t.Fatalf("ForwardAccount() = response %#v, error %v; want hidden upstream failure", response, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ForwardAccount(): %v", err)
+			}
+			payload, readErr := io.ReadAll(response.Body)
+			_ = response.Body.Close()
+			if !errors.Is(readErr, ErrRelayUpstreamFailed) {
+				t.Fatalf("read sanitized response: %v", readErr)
+			}
+			text := string(payload)
+			if strings.Contains(text, "secret-provider") || strings.Contains(text, "secret.example") {
+				t.Fatalf("sanitized stream exposed upstream details: %s", text)
+			}
+			if !strings.Contains(text, "Upstream request failed") {
+				t.Fatalf("sanitized stream omitted generic error: %s", text)
+			}
+		})
+	}
+}
+
+func TestForwardAccountRejectsResidualContentEncoding(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Encoding", "br")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"error":{"message":"secret-provider"}}`)
+	}))
+	defer upstream.Close()
+
+	service := &RelayStationService{}
+	inbound, _ := http.NewRequest(http.MethodPost, "http://sub2api.test/v1/chat/completions", nil)
+	response, err := service.ForwardAccount(context.Background(), &Account{}, &RelayRoute{
+		station: relayStation{ID: "private", Type: RelayStationTypeSub2API, BaseURL: upstream.URL, ProxyToken: "token"},
+		source:  RelayStationSource{SourceGroup: "default"},
+	}, inbound)
+	if response != nil || !errors.Is(err, ErrRelayUpstreamFailed) {
+		t.Fatalf("encoded relay error was not hidden: response %#v, error %v", response, err)
+	}
+}
+
+func TestRelayForwardQueryDropsBuyerCredentials(t *testing.T) {
+	query := make(url.Values)
+	query.Set("key", "buyer-secret")
+	query.Set("access_token", "buyer-token")
+	query.Set("authorization", "buyer-auth")
+	query.Set("x-api-key", "buyer-api-key")
+	query.Set("refresh_token", "buyer-refresh")
+	query.Set("alt", "sse")
+	query.Set("page", "2")
+
+	clean := relayForwardQuery(query)
+	if clean.Get("key") != "" || clean.Get("access_token") != "" || clean.Get("authorization") != "" || clean.Get("x-api-key") != "" || clean.Get("refresh_token") != "" {
+		t.Fatalf("buyer credentials were retained: %v", clean)
+	}
+	if clean.Get("alt") != "sse" || clean.Get("page") != "2" {
+		t.Fatalf("non-authentication query values were removed: %v", clean)
 	}
 }
 
@@ -526,7 +751,7 @@ func TestForwardDiscoversNewAPIGroupKey(t *testing.T) {
 			if got := r.URL.Query().Get("stream_options"); got != "include_usage" {
 				t.Errorf("forwarded query = %q, want include_usage", got)
 			}
-			_, _ = w.Write([]byte(`{}`))
+			_, _ = w.Write([]byte(`{"id":"chatcmpl-test","choices":[]}`))
 		default:
 			t.Errorf("unexpected newapi endpoint: %s", r.URL.Path)
 		}
@@ -570,7 +795,7 @@ func TestForwardDiscoversSub2APIGroupKey(t *testing.T) {
 			if got := r.Header.Get("Authorization"); got != "Bearer sk-upstream-key" {
 				t.Errorf("sub2api authorization = %q", got)
 			}
-			_, _ = w.Write([]byte(`{}`))
+			_, _ = w.Write([]byte(`{"id":"chatcmpl-test","choices":[]}`))
 		default:
 			t.Errorf("unexpected sub2api endpoint: %s", r.URL.Path)
 		}

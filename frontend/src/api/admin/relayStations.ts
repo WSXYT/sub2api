@@ -151,7 +151,10 @@ export function effectiveRelayRate(
 	return Number.isFinite(value) && value >= 0 ? value : null;
 }
 
-export function relayProfitRange(startDate: string, endDate: string): {
+export function relayProfitRange(
+	startDate: string,
+	endDate: string,
+): {
 	startAt: string;
 	endAt: string;
 } {

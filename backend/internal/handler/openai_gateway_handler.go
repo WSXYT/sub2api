@@ -488,31 +488,6 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	pricingCtx, pricingAt := h.gatewayService.WithOpenAIRequestPricingContext(c.Request.Context(), apiKey.GroupID)
 	c.Request = c.Request.WithContext(pricingCtx)
 
-	if !imageIntent {
-		relayUpstreamModel := reqModel
-		if channelMapping.Mapped {
-			relayUpstreamModel = channelMapping.MappedModel
-		}
-		if h.tryRelayOpenAIForward(c, relayOpenAIForwardInput{
-			APIKey:               apiKey,
-			Subscription:         subscription,
-			Body:                 forwardBody,
-			OriginalModel:        reqModel,
-			UpstreamModel:        relayUpstreamModel,
-			Stream:               reqStream,
-			SessionHash:          sessionHash,
-			PricingAt:            pricingAt,
-			ChannelUsageFields:   clientRequestedUsageFields(c, channelMapping, reqModel, relayUpstreamModel),
-			RequiredCapability:   requiredCapability,
-			RequiredTransport:    service.OpenAIUpstreamTransportAny,
-			RequestPlatform:      requestPlatform,
-			RequireCompact:       requireCompact,
-			UseUpstreamTokenCost: !imageIntent,
-		}, &streamStarted) {
-			return
-		}
-	}
-
 	for {
 		// Streaming Forward intentionally detaches the upstream request so usage can
 		// be drained after a disconnect. Re-check the client context before every
@@ -620,6 +595,20 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					accountReleaseFunc()
 				}
 			}()
+			if account.IsRelay() {
+				upstreamModel := forwardModel
+				if mappedModel := account.GetMappedModel(upstreamModel); mappedModel != upstreamModel {
+					attemptBody = h.gatewayService.ReplaceModelInBody(attemptBody, mappedModel)
+					upstreamModel = mappedModel
+				}
+				return h.forwardRelayOpenAIAccount(c.Request.Context(), c, account, derefGroupID(apiKey.GroupID), relayGatewayForwardInput{
+					Body:          attemptBody,
+					Path:          c.Request.URL.Path,
+					OriginalModel: reqModel,
+					UpstreamModel: upstreamModel,
+					Stream:        reqStream,
+				}, &streamStarted)
+			}
 			return h.gatewayService.Forward(c.Request.Context(), c, account, attemptBody)
 		}()
 		cyberBlockKeyHTTP := ""

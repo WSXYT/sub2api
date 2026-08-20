@@ -43,6 +43,7 @@ type GatewayHandler struct {
 	openAIGatewayService      *service.OpenAIGatewayService
 	geminiCompatService       *service.GeminiMessagesCompatService
 	antigravityGatewayService *service.AntigravityGatewayService
+	relayService              *service.RelayStationService
 	userService               *service.UserService
 	billingCacheService       *service.BillingCacheService
 	usageService              *service.UsageService
@@ -65,6 +66,7 @@ func NewGatewayHandler(
 	openAIGatewayService *service.OpenAIGatewayService,
 	geminiCompatService *service.GeminiMessagesCompatService,
 	antigravityGatewayService *service.AntigravityGatewayService,
+	relayService *service.RelayStationService,
 	userService *service.UserService,
 	concurrencyService *service.ConcurrencyService,
 	billingCacheService *service.BillingCacheService,
@@ -101,6 +103,7 @@ func NewGatewayHandler(
 		openAIGatewayService:      openAIGatewayService,
 		geminiCompatService:       geminiCompatService,
 		antigravityGatewayService: antigravityGatewayService,
+		relayService:              relayService,
 		userService:               userService,
 		billingCacheService:       billingCacheService,
 		usageService:              usageService,
@@ -460,7 +463,25 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			}
 			// 记录 Forward 前已写入字节数，Forward 后若增加则说明 SSE 内容已发，禁止 failover
 			writerSizeBeforeForward := c.Writer.Size()
-			if account.Platform == service.PlatformAntigravity {
+			if account.IsRelay() {
+				upstreamModel := reqModel
+				relayBody := body
+				if channelMapping.Mapped {
+					upstreamModel = channelMapping.MappedModel
+					relayBody = h.gatewayService.ReplaceModelInBody(relayBody, upstreamModel)
+				}
+				if mappedModel := account.GetMappedModel(upstreamModel); mappedModel != upstreamModel {
+					relayBody = h.gatewayService.ReplaceModelInBody(relayBody, mappedModel)
+					upstreamModel = mappedModel
+				}
+				result, err = h.forwardRelayAccount(requestCtx, c, account, derefGroupID(apiKey.GroupID), relayGatewayForwardInput{
+					Body:          relayBody,
+					Path:          c.Request.URL.Path,
+					OriginalModel: reqModel,
+					UpstreamModel: upstreamModel,
+					Stream:        reqStream,
+				}, &streamStarted)
+			} else if account.Platform == service.PlatformAntigravity {
 				result, err = h.antigravityGatewayService.ForwardGemini(
 					requestCtx,
 					c,
@@ -854,7 +875,21 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			}
 			// 记录 Forward 前已写入字节数，Forward 后若增加则说明 SSE 内容已发，禁止 failover
 			writerSizeBeforeForward := c.Writer.Size()
-			if account.Platform == service.PlatformAntigravity && account.Type != service.AccountTypeAPIKey {
+			if account.IsRelay() {
+				upstreamModel := attemptParsedReq.Model
+				relayBody := attemptBody
+				if mappedModel := account.GetMappedModel(upstreamModel); mappedModel != upstreamModel {
+					relayBody = h.gatewayService.ReplaceModelInBody(relayBody, mappedModel)
+					upstreamModel = mappedModel
+				}
+				result, err = h.forwardRelayAccount(requestCtx, c, account, derefGroupID(currentAPIKey.GroupID), relayGatewayForwardInput{
+					Body:          relayBody,
+					Path:          c.Request.URL.Path,
+					OriginalModel: reqModel,
+					UpstreamModel: upstreamModel,
+					Stream:        reqStream,
+				}, &streamStarted)
+			} else if account.Platform == service.PlatformAntigravity && account.Type != service.AccountTypeAPIKey {
 				result, err = h.antigravityGatewayService.Forward(requestCtx, c, account, attemptBody, hasBoundSession)
 			} else {
 				result, err = h.gatewayService.Forward(requestCtx, c, account, attemptParsedReq)
@@ -2068,6 +2103,22 @@ func (h *GatewayHandler) CountTokens(c *gin.Context) {
 	setOpsSelectedAccount(c, account.ID, account.Platform)
 
 	// 转发请求（不记录使用量）
+	if account.IsRelay() {
+		upstreamModel := account.GetMappedModel(parsedReq.Model)
+		relayBody := parsedReq.Body.Bytes()
+		if upstreamModel != parsedReq.Model {
+			relayBody = h.gatewayService.ReplaceModelInBody(relayBody, upstreamModel)
+		}
+		if _, err := h.forwardRelayAccount(c.Request.Context(), c, account, derefGroupID(apiKey.GroupID), relayGatewayForwardInput{
+			Body:          relayBody,
+			Path:          c.Request.URL.Path,
+			OriginalModel: parsedReq.Model,
+			UpstreamModel: upstreamModel,
+		}, nil); err != nil && !c.Writer.Written() {
+			h.errorResponse(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")
+		}
+		return
+	}
 	if err := h.gatewayService.ForwardCountTokens(c.Request.Context(), c, account, parsedReq); err != nil {
 		reqLog.Error("gateway.count_tokens_forward_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 		// 错误响应已在 ForwardCountTokens 中处理

@@ -66,6 +66,13 @@ func (h *GatewayHandler) GeminiV1BetaListModels(c *gin.Context) {
 		return
 	}
 
+	if account.IsRelay() {
+		if _, err := h.forwardRelayAccount(c.Request.Context(), c, account, derefGroupID(apiKey.GroupID), relayGatewayForwardInput{Path: "/v1beta/models"}, nil); err != nil && !c.Writer.Written() {
+			googleError(c, http.StatusBadGateway, "Upstream request failed")
+		}
+		return
+	}
+
 	res, err := h.geminiCompatService.ForwardAIStudioGET(c.Request.Context(), account, "/v1beta/models")
 	if err != nil {
 		googleError(c, http.StatusBadGateway, err.Error())
@@ -125,6 +132,18 @@ func (h *GatewayHandler) GeminiV1BetaGetModel(c *gin.Context) {
 		}
 		markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
 		googleError(c, http.StatusServiceUnavailable, "No available Gemini accounts: "+err.Error())
+		return
+	}
+
+	if account.IsRelay() {
+		upstreamModel := account.GetMappedModel(modelName)
+		if _, err := h.forwardRelayAccount(c.Request.Context(), c, account, derefGroupID(apiKey.GroupID), relayGatewayForwardInput{
+			Path:          "/v1beta/models/" + upstreamModel,
+			OriginalModel: modelName,
+			UpstreamModel: upstreamModel,
+		}, nil); err != nil && !c.Writer.Written() {
+			googleError(c, http.StatusBadGateway, "Upstream request failed")
+		}
 		return
 	}
 
@@ -504,7 +523,16 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 			requestCtx = service.WithAccountSwitchCount(requestCtx, fs.SwitchCount, h.metadataBridgeEnabled())
 		}
 		sessionGroupID := derefGroupID(apiKey.GroupID)
-		if account.Platform == service.PlatformAntigravity && account.Type != service.AccountTypeAPIKey {
+		if account.IsRelay() {
+			upstreamModel := account.GetMappedModel(modelName)
+			result, err = h.forwardRelayAccount(requestCtx, c, account, sessionGroupID, relayGatewayForwardInput{
+				Body:          body,
+				Path:          "/v1beta/models/" + upstreamModel + ":" + action,
+				OriginalModel: reqModel,
+				UpstreamModel: upstreamModel,
+				Stream:        stream,
+			}, &streamStarted)
+		} else if account.Platform == service.PlatformAntigravity && account.Type != service.AccountTypeAPIKey {
 			result, err = h.antigravityGatewayService.ForwardGemini(
 				requestCtx,
 				c,

@@ -184,8 +184,31 @@ func (a *Account) RelayEffectiveRate() (float64, bool) {
 	if !exists || raw == nil {
 		return 0, false
 	}
+	updatedAt, err := time.Parse(time.RFC3339Nano, a.GetExtraString("relay_rate_updated_at"))
+	if err != nil || time.Since(updatedAt) > relayStationRouteTTL {
+		return 0, false
+	}
 	value := parseExtraFloat64(raw)
 	return value, value >= 0
+}
+
+func (a *Account) setRelayEffectiveRate(value float64, updatedAt time.Time) {
+	if a == nil || !a.IsRelay() {
+		return
+	}
+	if a.Extra == nil {
+		a.Extra = make(map[string]any)
+	}
+	a.Extra["relay_effective_rate"] = value
+	a.Extra["relay_rate_updated_at"] = updatedAt.Format(time.RFC3339Nano)
+}
+
+func (a *Account) relayEffectiveRateUpdatedAt() time.Time {
+	if a == nil || a.Extra == nil {
+		return time.Time{}
+	}
+	updatedAt, _ := time.Parse(time.RFC3339Nano, a.GetExtraString("relay_rate_updated_at"))
+	return updatedAt
 }
 
 // IsSyntheticUITest reports whether the account belongs to an isolated UI load-test
@@ -205,6 +228,11 @@ func (a *Account) IsSyntheticUITest() bool {
 // - 允许 0，表示该账号计费为 0
 // - 负数属于非法数据，出于安全考虑按 1.0 处理
 func (a *Account) BillingRateMultiplier() float64 {
+	if a != nil && a.IsRelay() {
+		if rate, ok := a.RelayEffectiveRate(); ok {
+			return rate
+		}
+	}
 	if a == nil || a.RateMultiplier == nil {
 		return 1.0
 	}
@@ -1741,19 +1769,21 @@ func (a *Account) GetOpenAISessionID() string {
 }
 
 func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapability) bool {
-	if a != nil && a.IsRelay() {
-		switch capability {
-		case OpenAIEndpointCapabilityGrokMediaGeneration, OpenAIEndpointCapabilityGrokNativeVoice, OpenAIEndpointCapabilityGrokNativeMedia:
-			return false
-		default:
-			return true
-		}
-	}
 	if a == nil {
 		return false
 	}
 	if capability == "" {
 		return true
+	}
+	if a.IsRelay() {
+		switch a.Platform {
+		case PlatformOpenAI:
+			return capability == OpenAIEndpointCapabilityChatCompletions ||
+				capability == OpenAIEndpointCapabilityEmbeddings ||
+				capability == OpenAIEndpointCapabilityResponses
+		case PlatformGrok:
+			return capability == OpenAIEndpointCapabilityChatCompletions
+		}
 	}
 	if !a.IsOpenAICompatible() {
 		return false
@@ -1911,11 +1941,11 @@ func (a *Account) openAIEndpointCapabilitySet() (map[string]bool, bool) {
 }
 
 func (a *Account) SupportsOpenAIImageCapability(capability OpenAIImagesCapability) bool {
-	if a != nil && a.IsRelay() {
-		return true
-	}
 	if capability == "" {
 		return true
+	}
+	if a != nil && a.IsRelay() {
+		return false
 	}
 	if !a.IsOpenAI() {
 		return false

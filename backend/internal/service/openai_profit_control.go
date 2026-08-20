@@ -304,14 +304,23 @@ func openAIProfitControlVetoReason(ctx context.Context, account *Account) (bool,
 	if gate == nil || account == nil {
 		return false, ""
 	}
-	if account.RateMultiplier == nil ||
-		math.IsNaN(*account.RateMultiplier) ||
-		math.IsInf(*account.RateMultiplier, 0) ||
-		*account.RateMultiplier < 0 {
+	rateMultiplier := account.RateMultiplier
+	if account.IsRelay() {
+		effectiveRate, ok := account.RelayEffectiveRate()
+		if !ok {
+			openAIProfitControlObserverInstance.recordVeto(gate.groupID, gate.platform, gate.threshold, openAIProfitFilterReasonInvalidAccountRate)
+			return true, openAIProfitFilterReasonInvalidAccountRate
+		}
+		rateMultiplier = &effectiveRate
+	}
+	if rateMultiplier == nil ||
+		math.IsNaN(*rateMultiplier) ||
+		math.IsInf(*rateMultiplier, 0) ||
+		*rateMultiplier < 0 {
 		openAIProfitControlObserverInstance.recordVeto(gate.groupID, gate.platform, gate.threshold, openAIProfitFilterReasonInvalidAccountRate)
 		return true, openAIProfitFilterReasonInvalidAccountRate
 	}
-	upstream := *account.RateMultiplier
+	upstream := *rateMultiplier
 	if profitControlOverThreshold(upstream, gate.threshold) {
 		openAIProfitControlObserverInstance.recordVeto(gate.groupID, gate.platform, gate.threshold, openAIProfitFilterReasonThreshold)
 		return true, openAIProfitFilterReasonThreshold

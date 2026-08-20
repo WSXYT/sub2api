@@ -9,143 +9,210 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
-	"go.uber.org/zap"
 )
 
 const relayUsageCaptureLimit = 2 << 20
 
-type relayOpenAIForwardInput struct {
-	APIKey               *service.APIKey
-	Subscription         *service.UserSubscription
-	Body                 []byte
-	OriginalModel        string
-	UpstreamModel        string
-	Stream               bool
-	SessionHash          string
-	PricingAt            time.Time
-	ChannelUsageFields   service.ChannelUsageFields
-	RequiredCapability   service.OpenAIEndpointCapability
-	RequiredTransport    service.OpenAIUpstreamTransport
-	RequestPlatform      string
-	RequireCompact       bool
-	UseUpstreamTokenCost bool
+type relayGatewayForwardInput struct {
+	Body          []byte
+	Path          string
+	OriginalModel string
+	UpstreamModel string
+	Stream        bool
 }
 
-// tryRelayOpenAIForward lets the native scheduler choose a relay Account. A
-// native account selection is left to the caller's normal loop; relay traffic
-// only short-circuits after a relay identity wins the same candidate pool.
-func (h *OpenAIGatewayHandler) tryRelayOpenAIForward(c *gin.Context, input relayOpenAIForwardInput, streamStarted *bool) bool {
-	if h.relayService == nil || input.APIKey == nil || input.APIKey.GroupID == nil {
-		return false
+func (h *OpenAIGatewayHandler) forwardRelayOpenAIAccount(
+	ctx context.Context,
+	c *gin.Context,
+	account *service.Account,
+	groupID int64,
+	input relayGatewayForwardInput,
+	streamStarted *bool,
+) (*service.OpenAIForwardResult, error) {
+	if h.relayService == nil || account == nil || !account.IsRelay() {
+		return nil, service.ErrRelayRouteNotFound
 	}
-
-	selection, _, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
-		c.Request.Context(), input.APIKey.GroupID, "", input.SessionHash,
-		input.OriginalModel, nil, input.RequiredTransport, input.RequiredCapability,
-		input.RequireCompact, false, input.UseUpstreamTokenCost, input.RequestPlatform,
-	)
-	if err != nil || selection == nil || selection.Account == nil || !selection.Account.IsRelay() {
-		return false
-	}
-	account := selection.Account
-	route, err := h.relayService.ResolveRouteForAccount(c.Request.Context(), account, *input.APIKey.GroupID)
-	if errors.Is(err, service.ErrRelayRouteNotFound) {
-		return false
-	}
+	route, err := h.relayService.ResolveRouteForAccount(ctx, account, groupID)
 	if err != nil {
-		h.handleStreamingAwareError(c, http.StatusBadGateway, "api_error", "No relay source is currently available", valueOrFalse(streamStarted))
-		return true
+		return nil, relayGatewayFailoverError(account, 0)
 	}
-	if mappedModel := account.GetMappedModel(input.OriginalModel); mappedModel != input.OriginalModel {
-		input.Body = h.gatewayService.ReplaceModelInBody(input.Body, mappedModel)
-		input.UpstreamModel = mappedModel
+	inbound := relayGatewayInboundRequest(ctx, c, input)
+	startedAt := time.Now()
+	response, err := h.relayService.ForwardAccount(ctx, account, route, inbound)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		statusCode, _ := service.RelayUpstreamStatus(err)
+		return nil, relayGatewayFailoverError(account, statusCode)
 	}
-	relayLogger := requestLogger(c, "handler.openai_gateway.relay")
-	release, slotStatus := h.acquireResponsesAccountSlot(c, input.APIKey.GroupID, input.SessionHash, selection, input.Stream, streamStarted, relayLogger)
-	if slotStatus != openAISlotAcquireOK {
-		return true
+	defer func() { _ = response.Body.Close() }()
+	return forwardRelayOpenAIResponse(c, response, input, startedAt, streamStarted)
+}
+
+func (h *GatewayHandler) forwardRelayAccount(
+	ctx context.Context,
+	c *gin.Context,
+	account *service.Account,
+	groupID int64,
+	input relayGatewayForwardInput,
+	streamStarted *bool,
+) (*service.ForwardResult, error) {
+	return forwardRelayGatewayAccount(h.relayService, ctx, c, account, groupID, input, streamStarted)
+}
+
+func forwardRelayGatewayAccount(
+	relayService *service.RelayStationService,
+	ctx context.Context,
+	c *gin.Context,
+	account *service.Account,
+	groupID int64,
+	input relayGatewayForwardInput,
+	streamStarted *bool,
+) (*service.ForwardResult, error) {
+	if relayService == nil || account == nil || !account.IsRelay() {
+		return nil, service.ErrRelayRouteNotFound
 	}
-	if release != nil {
-		defer release()
+	route, err := relayService.ResolveRouteForAccount(ctx, account, groupID)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, relayGatewayFailoverError(account, 0)
 	}
 
-	inbound := c.Request.Clone(c.Request.Context())
+	inbound := relayGatewayInboundRequest(ctx, c, input)
+	startedAt := time.Now()
+	response, err := relayService.ForwardAccount(ctx, account, route, inbound)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		statusCode, _ := service.RelayUpstreamStatus(err)
+		return nil, relayGatewayFailoverError(account, statusCode)
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return nil, relayGatewayFailoverError(account, response.StatusCode)
+	}
+
+	result := &service.ForwardResult{
+		RequestID:     response.Header.Get("x-request-id"),
+		Model:         input.OriginalModel,
+		UpstreamModel: input.UpstreamModel,
+		Stream:        input.Stream,
+	}
+	copyRelayResponseHeaders(c.Writer.Header(), response.Header)
+	c.Status(response.StatusCode)
+	stream := input.Stream || strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream")
+	var streamUsage *relaySSEChunkAccumulator
+	if stream {
+		streamUsage = newRelaySSEChunkAccumulator(func(event []byte) { applyRelayGatewaySSEResult(result, event) })
+	}
+	capture, firstTokenMs, err := copyRelayResponseBody(c, response.Body, stream, startedAt, streamStarted, relaySSEConsumer(streamUsage))
+	if streamUsage != nil {
+		streamUsage.finish()
+	}
+	result.Duration = time.Since(startedAt)
+	result.FirstTokenMs = firstTokenMs
+	if err != nil {
+		if errors.Is(err, service.ErrRelayUpstreamFailed) {
+			return result, relayGatewayFailoverError(account, 0)
+		}
+		return result, err
+	}
+	if !stream {
+		applyRelayGatewayJSONResult(result, capture)
+	}
+	return result, nil
+}
+
+func relayGatewayInboundRequest(ctx context.Context, c *gin.Context, input relayGatewayForwardInput) *http.Request {
+	inbound := c.Request.Clone(ctx)
+	if input.Path != "" {
+		inbound.URL.Path = input.Path
+		inbound.URL.RawPath = ""
+	}
+	if input.Stream {
+		inbound.Header.Set("X-Sub2API-Relay-Expected-Stream", "1")
+	}
 	inbound.Body = io.NopCloser(bytes.NewReader(input.Body))
 	inbound.ContentLength = int64(len(input.Body))
 	inbound.GetBody = func() (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(input.Body)), nil
 	}
-
-	startedAt := time.Now()
-	response, err := h.relayService.ForwardAccount(c.Request.Context(), account, route, inbound)
-	if err != nil {
-		h.handleStreamingAwareError(c, http.StatusBadGateway, "api_error", "Relay request failed", valueOrFalse(streamStarted))
-		return true
-	}
-	defer func() { _ = response.Body.Close() }()
-
-	result, err := forwardRelayOpenAIResponse(c, response, input, startedAt, streamStarted)
-	if err != nil {
-		logger.L().With(
-			zap.String("component", "handler.relay_station"),
-			zap.String("station_id", route.StationID()),
-			zap.Error(err),
-		).Warn("relay response read failed")
-		return true
-	}
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices || result == nil {
-		return true
-	}
-
-	userAgent := c.GetHeader("User-Agent")
-	clientIP := ip.GetClientIP(c)
-	inboundEndpoint := GetInboundEndpoint(c)
-	upstreamEndpoint := c.Request.URL.Path
-	quotaPlatform := service.QuotaPlatform(c.Request.Context(), input.APIKey)
-	sessionID := service.ExtractClientSessionID(c)
-	requestPayloadHash := service.HashUsageRequestPayload(input.Body)
-	h.submitOpenAIUsageRecordTask(c.Request.Context(), result, func(ctx context.Context) {
-		if err := h.gatewayService.RecordUsage(ctx, &service.OpenAIRecordUsageInput{
-			Result:             result,
-			APIKey:             input.APIKey,
-			User:               input.APIKey.User,
-			Account:            account,
-			Subscription:       input.Subscription,
-			InboundEndpoint:    inboundEndpoint,
-			UpstreamEndpoint:   upstreamEndpoint,
-			UserAgent:          userAgent,
-			IPAddress:          clientIP,
-			RequestPayloadHash: requestPayloadHash,
-			APIKeyService:      h.apiKeyService,
-			QuotaPlatform:      quotaPlatform,
-			SessionID:          sessionID,
-			PricingAt:          input.PricingAt,
-			ChannelUsageFields: input.ChannelUsageFields,
-		}); err != nil {
-			logger.L().With(
-				zap.String("component", "handler.relay_station"),
-				zap.String("station_id", route.StationID()),
-				zap.Int64("api_key_id", input.APIKey.ID),
-				zap.Error(err),
-			).Error("relay usage record failed")
-		}
-	})
-	return true
+	return inbound
 }
 
-func valueOrFalse(value *bool) bool {
-	return value != nil && *value
+func relayGatewayFailoverError(account *service.Account, upstreamStatus int) error {
+	retryableOnSameAccount := account != nil && account.IsPoolMode() && account.IsPoolModeRetryableStatus(upstreamStatus)
+	return &service.UpstreamFailoverError{
+		StatusCode:             http.StatusBadGateway,
+		ResponseBody:           []byte(`{"error":{"message":"Upstream request failed"}}`),
+		RetryableOnSameAccount: retryableOnSameAccount,
+		Stage:                  service.GatewayFailureStageInference,
+		Scope:                  service.GatewayFailureScopeAccount,
+		ClientStatusCode:       http.StatusBadGateway,
+		ClientMessage:          "Upstream request failed",
+	}
+}
+
+func applyRelayGatewayJSONResult(result *service.ForwardResult, payload []byte) {
+	if result == nil || !gjson.ValidBytes(payload) {
+		return
+	}
+	parsed := gjson.ParseBytes(payload)
+	for _, path := range []string{"model", "modelVersion", "response.model", "response.modelVersion"} {
+		if model := strings.TrimSpace(parsed.Get(path).String()); model != "" {
+			result.UpstreamResponseModel = model
+			break
+		}
+	}
+	for _, path := range []string{"usage", "message.usage", "response.usage"} {
+		mergeRelayClaudeUsage(&result.Usage, relayClaudeUsage(parsed.Get(path)))
+	}
+	for _, path := range []string{"usageMetadata", "response.usageMetadata"} {
+		mergeRelayClaudeUsage(&result.Usage, relayGeminiUsage(parsed.Get(path)))
+	}
+}
+
+func relayClaudeUsage(value gjson.Result) service.ClaudeUsage {
+	input, _ := relayUsageInt(value, "input_tokens", "prompt_tokens")
+	output, _ := relayUsageInt(value, "output_tokens", "completion_tokens")
+	cacheRead, _ := relayUsageInt(value, "cache_read_input_tokens", "input_tokens_details.cached_tokens", "prompt_tokens_details.cached_tokens")
+	cacheCreation, _ := relayUsageInt(value, "cache_creation_input_tokens", "input_tokens_details.cache_creation_tokens", "prompt_tokens_details.cache_creation_tokens")
+	return service.ClaudeUsage{InputTokens: input, OutputTokens: output, CacheReadInputTokens: cacheRead, CacheCreationInputTokens: cacheCreation}
+}
+
+func relayGeminiUsage(value gjson.Result) service.ClaudeUsage {
+	input, _ := relayUsageInt(value, "promptTokenCount")
+	output, _ := relayUsageInt(value, "candidatesTokenCount")
+	cacheRead, _ := relayUsageInt(value, "cachedContentTokenCount")
+	return service.ClaudeUsage{InputTokens: input, OutputTokens: output, CacheReadInputTokens: cacheRead}
+}
+
+func mergeRelayClaudeUsage(destination *service.ClaudeUsage, candidate service.ClaudeUsage) {
+	if candidate.InputTokens > destination.InputTokens {
+		destination.InputTokens = candidate.InputTokens
+	}
+	if candidate.OutputTokens > destination.OutputTokens {
+		destination.OutputTokens = candidate.OutputTokens
+	}
+	if candidate.CacheReadInputTokens > destination.CacheReadInputTokens {
+		destination.CacheReadInputTokens = candidate.CacheReadInputTokens
+	}
+	if candidate.CacheCreationInputTokens > destination.CacheCreationInputTokens {
+		destination.CacheCreationInputTokens = candidate.CacheCreationInputTokens
+	}
 }
 
 func forwardRelayOpenAIResponse(
 	c *gin.Context,
 	response *http.Response,
-	input relayOpenAIForwardInput,
+	input relayGatewayForwardInput,
 	startedAt time.Time,
 	streamStarted *bool,
 ) (*service.OpenAIForwardResult, error) {
@@ -161,26 +228,34 @@ func forwardRelayOpenAIResponse(
 
 	stream := input.Stream || strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream")
 	result.Stream = stream
-	capture, err := copyRelayResponseBody(c, response.Body, stream, startedAt, result, streamStarted)
+	var streamUsage *relaySSEChunkAccumulator
+	if stream {
+		streamUsage = newRelaySSEChunkAccumulator(func(event []byte) { applyRelaySSEResult(result, event) })
+	}
+	capture, firstTokenMs, err := copyRelayResponseBody(c, response.Body, stream, startedAt, streamStarted, relaySSEConsumer(streamUsage))
+	if streamUsage != nil {
+		streamUsage.finish()
+	}
 	result.Duration = time.Since(startedAt)
+	result.FirstTokenMs = firstTokenMs
 	if err != nil {
+		if errors.Is(err, service.ErrRelayUpstreamFailed) {
+			return result, relayGatewayFailoverError(nil, 0)
+		}
 		return result, err
 	}
-	if stream {
-		applyRelaySSEResult(result, capture)
+	if !stream {
+		applyRelayJSONResult(result, capture)
 	}
-	applyRelayJSONResult(result, capture)
 	return result, nil
 }
 
 func copyRelayResponseHeaders(destination, source http.Header) {
-	for key, values := range source {
-		switch strings.ToLower(key) {
-		case "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade", "set-cookie":
-			continue
-		}
-		destination[key] = append([]string(nil), values...)
+	if strings.Contains(strings.ToLower(source.Get("Content-Type")), "text/event-stream") {
+		destination.Set("Content-Type", "text/event-stream")
+		return
 	}
+	destination.Set("Content-Type", "application/json")
 }
 
 func copyRelayResponseBody(
@@ -188,20 +263,24 @@ func copyRelayResponseBody(
 	body io.Reader,
 	stream bool,
 	startedAt time.Time,
-	result *service.OpenAIForwardResult,
 	streamStarted *bool,
-) ([]byte, error) {
+	onChunk func([]byte),
+) ([]byte, *int, error) {
 	capture := make([]byte, 0, relayUsageCaptureLimit)
 	buffer := make([]byte, 32*1024)
 	clientWriteFailed := false
+	var firstTokenMs *int
 	for {
 		count, readErr := body.Read(buffer)
 		if count > 0 {
 			chunk := buffer[:count]
 			capture = appendRelayUsageCapture(capture, chunk)
-			if result.FirstTokenMs == nil {
+			if onChunk != nil {
+				onChunk(chunk)
+			}
+			if firstTokenMs == nil {
 				firstToken := int(time.Since(startedAt).Milliseconds())
-				result.FirstTokenMs = &firstToken
+				firstTokenMs = &firstToken
 			}
 			if !clientWriteFailed {
 				if _, err := c.Writer.Write(buffer[:count]); err != nil {
@@ -215,10 +294,71 @@ func copyRelayResponseBody(
 			}
 		}
 		if readErr == io.EOF {
-			return capture, nil
+			return capture, firstTokenMs, nil
 		}
 		if readErr != nil {
-			return capture, readErr
+			return capture, firstTokenMs, readErr
+		}
+	}
+}
+
+type relaySSEChunkAccumulator struct {
+	pending []byte
+	apply   func([]byte)
+}
+
+func newRelaySSEChunkAccumulator(apply func([]byte)) *relaySSEChunkAccumulator {
+	return &relaySSEChunkAccumulator{apply: apply}
+}
+
+func relaySSEConsumer(accumulator *relaySSEChunkAccumulator) func([]byte) {
+	if accumulator == nil {
+		return nil
+	}
+	return accumulator.consume
+}
+
+func (a *relaySSEChunkAccumulator) consume(chunk []byte) {
+	if a == nil || a.apply == nil || len(chunk) == 0 {
+		return
+	}
+	a.pending = append(a.pending, chunk...)
+	for {
+		index, delimiterLength := relaySSEDelimiter(a.pending)
+		if index < 0 {
+			return
+		}
+		end := index + delimiterLength
+		a.apply(a.pending[:end])
+		a.pending = append(a.pending[:0], a.pending[end:]...)
+	}
+}
+
+func (a *relaySSEChunkAccumulator) finish() {
+	if a == nil || a.apply == nil || len(bytes.TrimSpace(a.pending)) == 0 {
+		return
+	}
+	a.apply(a.pending)
+	a.pending = nil
+}
+
+func relaySSEDelimiter(payload []byte) (int, int) {
+	lf := bytes.Index(payload, []byte("\n\n"))
+	crlf := bytes.Index(payload, []byte("\r\n\r\n"))
+	if lf >= 0 && (crlf < 0 || lf < crlf) {
+		return lf, 2
+	}
+	if crlf >= 0 {
+		return crlf, 4
+	}
+	return -1, 0
+}
+
+func applyRelayGatewaySSEResult(result *service.ForwardResult, payload []byte) {
+	for _, line := range bytes.Split(payload, []byte{'\n'}) {
+		line = bytes.TrimSpace(line)
+		if bytes.HasPrefix(line, []byte("data:")) {
+			applyRelayGatewayJSONResult(result, bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:"))))
 		}
 	}
 }

@@ -583,7 +583,7 @@
 
       <!-- OAuth and relay accounts use the native model-mapping controls without station credentials. -->
       <div
-        v-if="(account.platform === 'openai' || account.platform === 'grok') && (account.type === 'oauth' || account.type === 'relay' || isRelayAccount)"
+        v-if="isRelayAccount || ((account.platform === 'openai' || account.platform === 'grok') && (account.type === 'oauth' || account.type === 'relay'))"
         class="border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
@@ -1587,7 +1587,7 @@
           />
           <p class="input-hint">{{ t('admin.accounts.priorityHint') }}</p>
         </div>
-        <div>
+        <div v-if="!isRelayAccount">
           <label class="input-label">{{ t('admin.accounts.billingRateMultiplier') }}</label>
           <input
             v-model.number="form.rate_multiplier"
@@ -4511,6 +4511,9 @@ const handleSubmit = async () => {
       updatePayload.load_factor = 0
     }
     updatePayload.auto_pause_on_expired = autoPauseOnExpired.value
+    if (isRelayAccount.value) {
+      delete updatePayload.rate_multiplier
+    }
     if (props.account.type === 'apikey' && !isRelayAccount.value) {
       updatePayload.upstream_billing_probe_enabled = upstreamBillingAutoProbeEnabled.value
       updatePayload.upstream_billing_rate_sync_enabled = upstreamBillingRateSyncEnabled.value

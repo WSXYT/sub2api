@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -12,6 +13,19 @@ func TestAccount_BillingRateMultiplier_DefaultsToOneWhenNil(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(`{"id":1,"name":"acc","status":"active"}`), &a))
 	require.Nil(t, a.RateMultiplier)
 	require.Equal(t, 1.0, a.BillingRateMultiplier())
+}
+
+func TestAccount_BillingRateMultiplier_UsesRelayEffectiveRate(t *testing.T) {
+	manual := 1.0
+	account := Account{
+		RateMultiplier: &manual,
+		Extra: map[string]any{
+			relayAccountMarkerKey:  true,
+			"relay_effective_rate": 0.2,
+			"relay_rate_updated_at": time.Now().Format(time.RFC3339Nano),
+		},
+	}
+	require.Equal(t, 0.2, account.BillingRateMultiplier())
 }
 
 func TestAccount_BillingRateMultiplier_AllowsZero(t *testing.T) {

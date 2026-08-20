@@ -589,12 +589,32 @@ func TestAccountSupportsOpenAIEndpointCapability(t *testing.T) {
 		}
 
 		require.True(t, relay.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityChatCompletions))
+		require.False(t, relay.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityEmbeddings))
+		require.False(t, relay.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityResponses))
+		require.False(t, relay.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityAlphaSearch))
+		require.False(t, relay.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityLive))
 		require.False(t, relay.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityGrokMediaGeneration))
 		require.False(t, relay.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityGrokNativeVoice))
 		require.False(t, relay.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityGrokNativeMedia))
+		require.False(t, relay.SupportsOpenAIImageCapability(OpenAIImagesCapabilityBasic))
+		require.False(t, relay.SupportsOpenAIImageCapability(OpenAIImagesCapabilityNative))
 		grok := &Account{Platform: PlatformGrok, Type: AccountTypeOAuth}
 		require.True(t, grok.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityGrokNativeVoice))
 		require.True(t, grok.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityGrokNativeMedia))
+	})
+
+	t.Run("中转账号沿用 provider 原生文本能力", func(t *testing.T) {
+		for _, platform := range []string{PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek} {
+			native := &Account{Platform: platform, Type: AccountTypeAPIKey}
+			relay := &Account{Platform: platform, Type: AccountTypeAPIKey, Extra: map[string]any{relayAccountMarkerKey: true}}
+			for _, capability := range []OpenAIEndpointCapability{OpenAIEndpointCapabilityChatCompletions, OpenAIEndpointCapabilityEmbeddings, OpenAIEndpointCapabilityResponses} {
+				require.Equal(t, native.SupportsOpenAIEndpointCapability(capability), relay.SupportsOpenAIEndpointCapability(capability), "%s/%s", platform, capability)
+			}
+		}
+		openAIRelay := &Account{Platform: PlatformOpenAI, Type: "relay", Extra: map[string]any{relayAccountMarkerKey: true}}
+		require.True(t, openAIRelay.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityChatCompletions))
+		require.True(t, openAIRelay.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityEmbeddings))
+		require.True(t, openAIRelay.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityResponses))
 	})
 
 	t.Run("未知能力不应默认放行", func(t *testing.T) {

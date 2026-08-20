@@ -192,6 +192,28 @@ func (h *OpenAIGatewayHandler) CountTokens(c *gin.Context) {
 	}
 	forwardBody := mappedBodyForMessages(channelMapping.Mapped, channelMapping.MappedModel)
 	defaultMappedModel := preferredMappedModel
+	if account.IsRelay() {
+		upstreamModel := reqModel
+		if channelMapping.Mapped {
+			upstreamModel = channelMapping.MappedModel
+		} else if defaultMappedModel != "" {
+			upstreamModel = defaultMappedModel
+			forwardBody = h.gatewayService.ReplaceModelInBody(forwardBody, upstreamModel)
+		}
+		if mappedModel := account.GetMappedModel(upstreamModel); mappedModel != upstreamModel {
+			upstreamModel = mappedModel
+			forwardBody = h.gatewayService.ReplaceModelInBody(forwardBody, upstreamModel)
+		}
+		if _, err := forwardRelayGatewayAccount(h.relayService, c.Request.Context(), c, account, derefGroupID(apiKey.GroupID), relayGatewayForwardInput{
+			Body:          forwardBody,
+			Path:          c.Request.URL.Path,
+			OriginalModel: reqModel,
+			UpstreamModel: upstreamModel,
+		}, nil); err != nil && !c.Writer.Written() {
+			h.anthropicErrorResponse(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")
+		}
+		return
+	}
 
 	if err := h.gatewayService.ForwardCountTokensAsAnthropic(c.Request.Context(), c, account, forwardBody, defaultMappedModel); err != nil {
 		reqLog.Error("openai_count_tokens.forward_failed", zap.Int64("account_id", account.ID), zap.Error(err))

@@ -44,7 +44,7 @@ func TestIsHeaderOverrideEligible(t *testing.T) {
 
 	relay := &Account{Platform: PlatformOpenAI, Type: "relay", Extra: map[string]any{relayAccountMarkerKey: true}}
 	require.True(t, relay.IsHeaderOverrideEligible())
-	for _, platform := range []string{PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek} {
+	for _, platform := range []string{PlatformAnthropic, PlatformGemini, PlatformAntigravity, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek} {
 		relay = &Account{Platform: platform, Type: AccountTypeAPIKey, Extra: map[string]any{relayAccountMarkerKey: true}}
 		require.True(t, relay.IsHeaderOverrideEligible(), "%s relay should allow header overrides", platform)
 	}

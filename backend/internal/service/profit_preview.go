@@ -163,19 +163,28 @@ func previewAccountProfitAdmission(
 		Platform:   account.Platform,
 		RateSource: ProfitPreviewRateSourceManual,
 	}
+	rateMultiplier := account.RateMultiplier
+	if account.IsRelay() {
+		effectiveRate, ok := account.RelayEffectiveRate()
+		if ok {
+			rateMultiplier = &effectiveRate
+		} else {
+			rateMultiplier = nil
+		}
+	}
 	if enabled, _ := account.Extra[UpstreamBillingRateSyncEnabledExtraKey].(bool); enabled {
 		verdict.RateSource = ProfitPreviewRateSourceUpstreamProbe
 		verdict.Warnings = append(verdict.Warnings, profitPreviewProbeWarnings(account, evalAt)...)
-	} else if account.RateMultiplier != nil && *account.RateMultiplier == 1 {
+	} else if rateMultiplier != nil && *rateMultiplier == 1 {
 		verdict.Warnings = append(verdict.Warnings, ProfitPreviewWarningManualRateOne)
 	}
 
-	validRate := account.RateMultiplier != nil &&
-		!math.IsNaN(*account.RateMultiplier) &&
-		!math.IsInf(*account.RateMultiplier, 0) &&
-		*account.RateMultiplier >= 0
+	validRate := rateMultiplier != nil &&
+		!math.IsNaN(*rateMultiplier) &&
+		!math.IsInf(*rateMultiplier, 0) &&
+		*rateMultiplier >= 0
 	if validRate {
-		rate := *account.RateMultiplier
+		rate := *rateMultiplier
 		verdict.AccountRate = &rate
 	}
 	switch {
@@ -183,11 +192,11 @@ func previewAccountProfitAdmission(
 		verdict.Class = ProfitPreviewClassAdmitted
 	case !validRate:
 		verdict.Class = ProfitPreviewClassRejectedInvalidRate
-	case profitControlOverThreshold(*account.RateMultiplier, thresholdDefault):
+	case profitControlOverThreshold(*rateMultiplier, thresholdDefault):
 		verdict.Class = ProfitPreviewClassRejectedThreshold
 	default:
 		verdict.Class = ProfitPreviewClassAdmitted
-		verdict.RejectedUnderMinD = profitControlOverThreshold(*account.RateMultiplier, thresholdMinD)
+		verdict.RejectedUnderMinD = profitControlOverThreshold(*rateMultiplier, thresholdMinD)
 	}
 	return verdict
 }

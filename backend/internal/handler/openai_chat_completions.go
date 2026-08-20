@@ -152,30 +152,6 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 	ccPricingCtx, pricingAt := h.gatewayService.WithOpenAIRequestPricingContext(c.Request.Context(), apiKey.GroupID)
 	c.Request = c.Request.WithContext(ccPricingCtx)
 
-	relayBody := body
-	relayUpstreamModel := reqModel
-	if channelMapping.Mapped {
-		relayBody = h.gatewayService.ReplaceModelInBody(body, channelMapping.MappedModel)
-		relayUpstreamModel = channelMapping.MappedModel
-	}
-	if h.tryRelayOpenAIForward(c, relayOpenAIForwardInput{
-		APIKey:               apiKey,
-		Subscription:         subscription,
-		Body:                 relayBody,
-		OriginalModel:        reqModel,
-		UpstreamModel:        relayUpstreamModel,
-		Stream:               reqStream,
-		SessionHash:          sessionHash,
-		PricingAt:            pricingAt,
-		ChannelUsageFields:   clientRequestedUsageFields(c, channelMapping, reqModel, relayUpstreamModel),
-		RequiredCapability:   service.OpenAIEndpointCapabilityChatCompletions,
-		RequiredTransport:    service.OpenAIUpstreamTransportAny,
-		RequestPlatform:      requestPlatform,
-		UseUpstreamTokenCost: true,
-	}, &streamStarted) {
-		return
-	}
-
 	for {
 		if failoverClientGone(c) {
 			return
@@ -261,6 +237,23 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 					accountReleaseFunc()
 				}
 			}()
+			if account.IsRelay() {
+				upstreamModel := reqModel
+				if channelMapping.Mapped {
+					upstreamModel = channelMapping.MappedModel
+				}
+				if mappedModel := account.GetMappedModel(upstreamModel); mappedModel != upstreamModel {
+					forwardBody = h.gatewayService.ReplaceModelInBody(forwardBody, mappedModel)
+					upstreamModel = mappedModel
+				}
+				return h.forwardRelayOpenAIAccount(c.Request.Context(), c, account, derefGroupID(apiKey.GroupID), relayGatewayForwardInput{
+					Body:          forwardBody,
+					Path:          c.Request.URL.Path,
+					OriginalModel: reqModel,
+					UpstreamModel: upstreamModel,
+					Stream:        reqStream,
+				}, &streamStarted)
+			}
 			return h.gatewayService.ForwardAsChatCompletions(c.Request.Context(), c, account, forwardBody, promptCacheKey, "")
 		}()
 		cyberBlockKeyChat := ""

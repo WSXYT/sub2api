@@ -1,14 +1,17 @@
 package admin
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 // RelayStationHandler exposes credential-safe administrator APIs for relay stations.
@@ -200,7 +203,8 @@ func (h *RelayStationHandler) UpdateBindings(c *gin.Context) {
 	syncErr := h.relayService.SyncAIHubConfig(c.Request.Context())
 	payload := gin.H{"bindings": bindings, "aihub_synced": syncErr == nil}
 	if syncErr != nil {
-		payload["aihub_sync_error"] = syncErr.Error()
+		logger.L().Warn("relay aihub synchronization failed", zap.String("error_type", fmt.Sprintf("%T", syncErr)))
+		payload["aihub_sync_error"] = "relay synchronization failed"
 	}
 	response.Success(c, payload)
 }
@@ -244,7 +248,8 @@ func (h *RelayStationHandler) RefreshRates(c *gin.Context) {
 	}
 	payload := gin.H{"rates": rates, "refreshed": refreshErr == nil}
 	if refreshErr != nil {
-		payload["error"] = refreshErr.Error()
+		logger.L().Warn("relay rate refresh failed", zap.String("error_type", fmt.Sprintf("%T", refreshErr)))
+		payload["error"] = "relay rate refresh failed"
 	}
 	response.Success(c, payload)
 }

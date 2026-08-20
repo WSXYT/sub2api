@@ -571,6 +571,17 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	}
 	previousProbeIdentity := upstreamBillingProbeIdentity(account)
 	previousOllamaUsageIdentity := ollamaCloudUsageIdentity(account)
+	if account.IsRelay() {
+		if input.Type != "" && input.Type != account.Type {
+			return nil, infraerrors.BadRequest("RELAY_ACCOUNT_TYPE_MANAGED", "relay account type is managed by Relay Stations")
+		}
+		if input.GroupIDs != nil {
+			return nil, infraerrors.BadRequest("RELAY_ACCOUNT_GROUP_MANAGED", "relay account group is managed by Relay Stations")
+		}
+		if input.RateMultiplier != nil {
+			return nil, infraerrors.BadRequest("RELAY_ACCOUNT_RATE_MANAGED", "relay account rate is managed by Relay Stations")
+		}
+	}
 	// 安全/身份不变量(影子账号):通用更新路径被 edit/re-auth/refresh/batch 共用,
 	// 必须在此守住,否则仅在创建时的保证可被这些路径绕过。
 	if account.IsCredentialShadow() {
@@ -645,6 +656,11 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		delete(normalizedExtra, OllamaCloudUsageAutoRefreshExtraKey)
 		delete(normalizedExtra, OllamaCloudUsageSnapshotExtraKey)
 		// 保留配额用量和专用服务受管字段，防止普通账号编辑意外覆盖。
+		for key, value := range account.Extra {
+			if account.IsRelay() && strings.HasPrefix(key, "relay_") {
+				normalizedExtra[key] = value
+			}
+		}
 		for _, key := range []string{
 			"quota_used",
 			"quota_daily_used",
@@ -895,6 +911,11 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	delete(input.Extra, OllamaCloudUsageSessionExtraKey)
 	delete(input.Extra, OllamaCloudUsageAutoRefreshExtraKey)
 	delete(input.Extra, OllamaCloudUsageSnapshotExtraKey)
+	for key := range input.Extra {
+		if strings.HasPrefix(key, "relay_") {
+			delete(input.Extra, key)
+		}
+	}
 
 	if len(input.AccountIDs) == 0 && input.Filters != nil {
 		accountIDs, err := s.resolveBulkUpdateTargetIDs(ctx, input.Filters)
@@ -924,7 +945,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 
 	// 预取所有目标账号，供凭据守卫/代理守卫/混合渠道检查共用，避免多次 DB 查询。
 	var cachedTargets []*Account
-	if len(input.Credentials) > 0 || input.ProxyID != nil || needMixedChannelCheck || hasLongContextBillingUpdate || input.ProbeEnabled != nil || input.Priority != nil || input.RateMultiplier != nil {
+	if len(input.Credentials) > 0 || input.ProxyID != nil || needMixedChannelCheck || hasLongContextBillingUpdate || input.ProbeEnabled != nil || input.Priority != nil || input.RateMultiplier != nil || input.GroupIDs != nil || input.Schedulable != nil {
 		loaded, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
 		if err != nil {
 			return nil, err
@@ -1013,6 +1034,14 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		for _, account := range cachedTargets {
 			if account != nil && account.IsRelay() {
 				return nil, infraerrors.BadRequest("RELAY_PRIORITY_BULK_UNSUPPORTED", "update relay account priorities individually")
+			}
+		}
+	}
+
+	if input.GroupIDs != nil || input.Schedulable != nil || input.RateMultiplier != nil {
+		for _, account := range cachedTargets {
+			if account != nil && account.IsRelay() {
+				return nil, infraerrors.BadRequest("RELAY_ACCOUNT_BULK_MANAGED_FIELDS_UNSUPPORTED", "relay account group, schedulability, and rate are managed by Relay Stations")
 			}
 		}
 	}

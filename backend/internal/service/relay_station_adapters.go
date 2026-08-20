@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -16,10 +17,17 @@ import (
 	"time"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
+	"github.com/tidwall/gjson"
+	"go.uber.org/zap"
 )
 
-const relayStationControlTimeout = 15 * time.Second
+const (
+	relayStationControlTimeout = 15 * time.Second
+	relayResponseSanitizeLimit = 2 << 20
+	relaySSEEventLimit         = 1 << 20
+)
 
 type relayStationSession struct {
 	client      *http.Client
@@ -31,6 +39,11 @@ type relayStationSession struct {
 
 type relayHTTPStatusError struct {
 	status int
+}
+
+func relayTestFailure(stationID string, err error) error {
+	logger.L().Warn("relay station test failed", zap.String("station_id", stationID), zap.String("error_type", fmt.Sprintf("%T", err)))
+	return infraerrors.New(http.StatusBadGateway, "RELAY_TEST_FAILED", "relay station test failed")
 }
 
 func (e *relayHTTPStatusError) Error() string {
@@ -956,13 +969,279 @@ func (s *RelayStationService) requestSub2APIProxyToken(ctx context.Context, stat
 
 // Forward keeps the legacy adapter entry point for station-level tests.
 func (s *RelayStationService) Forward(ctx context.Context, route *RelayRoute, inbound *http.Request) (*http.Response, error) {
-	return s.forward(ctx, nil, route, inbound)
+	return s.ForwardAccount(ctx, nil, route, inbound)
 }
 
 // ForwardAccount applies native account header overrides before forwarding the
-// selected relay account through its station adapter.
+// selected relay account through its station adapter. Upstream failures are
+// logged internally and collapsed so callers cannot expose station details.
 func (s *RelayStationService) ForwardAccount(ctx context.Context, account *Account, route *RelayRoute, inbound *http.Request) (*http.Response, error) {
-	return s.forward(ctx, account, route, inbound)
+	response, err := s.forward(ctx, account, route, inbound)
+	if err != nil {
+		logger.L().Warn("relay upstream request failed",
+			zap.String("station_id", relayRouteStationID(route)),
+			zap.String("error_type", fmt.Sprintf("%T", err)),
+		)
+		return nil, relayUpstreamFailure(0)
+	}
+	if response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices {
+		if encoding := strings.TrimSpace(strings.ToLower(response.Header.Get("Content-Encoding"))); encoding != "" && encoding != "identity" {
+			_ = response.Body.Close()
+			logger.L().Warn("relay upstream returned unsupported content encoding",
+				zap.String("station_id", relayRouteStationID(route)),
+				zap.String("content_encoding", encoding),
+			)
+			return nil, relayUpstreamFailure(0)
+		}
+		response.Header.Del("Content-Encoding")
+		contentType := strings.ToLower(response.Header.Get("Content-Type"))
+		if relayRequestExpectsSSE(inbound) || strings.Contains(contentType, "text/event-stream") {
+			response.Header.Set("Content-Type", "text/event-stream")
+			response.Body = newRelaySanitizedSSEBody(response.Body, inbound.URL.Path, relayRouteStationID(route))
+			return response, nil
+		}
+		body, readErr := io.ReadAll(io.LimitReader(response.Body, relayResponseSanitizeLimit+1))
+		_ = response.Body.Close()
+		if readErr != nil {
+			logger.L().Warn("relay upstream response read failed",
+				zap.String("station_id", relayRouteStationID(route)),
+				zap.String("error_type", fmt.Sprintf("%T", readErr)),
+			)
+			return nil, relayUpstreamFailure(0)
+		}
+		if len(body) > relayResponseSanitizeLimit {
+			logger.L().Warn("relay upstream success response exceeded sanitization limit",
+				zap.String("station_id", relayRouteStationID(route)),
+			)
+			return nil, relayUpstreamFailure(0)
+		}
+		if !relayValidJSONSuccess(body, inbound.URL.Path) {
+			logger.L().Warn("relay upstream returned an invalid or failed successful-status payload",
+				zap.String("station_id", relayRouteStationID(route)),
+			)
+			return nil, relayUpstreamFailure(0)
+		}
+		response.Header.Set("Content-Type", "application/json")
+		response.Body = io.NopCloser(bytes.NewReader(body))
+		response.ContentLength = int64(len(body))
+		return response, nil
+	}
+
+	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4<<10))
+	_ = response.Body.Close()
+	logger.L().Warn("relay upstream returned an error",
+		zap.String("station_id", relayRouteStationID(route)),
+		zap.Int("status", response.StatusCode),
+	)
+	return nil, relayUpstreamFailure(response.StatusCode)
+}
+
+func relayRequestExpectsSSE(request *http.Request) bool {
+	if request == nil || request.URL == nil {
+		return false
+	}
+	if request.Header.Get("X-Sub2API-Relay-Expected-Stream") == "1" {
+		return true
+	}
+	if strings.Contains(strings.ToLower(request.Header.Get("Accept")), "text/event-stream") {
+		return true
+	}
+	if strings.EqualFold(request.URL.Query().Get("alt"), "sse") {
+		return true
+	}
+	return strings.Contains(strings.ToLower(request.URL.Path), "streamgeneratecontent")
+}
+
+func relayValidJSONSuccess(payload []byte, path string) bool {
+	if !gjson.ValidBytes(payload) {
+		return false
+	}
+	parsed := gjson.ParseBytes(payload)
+	if parsed.IsArray() || relayJSONErrorPayload(payload) {
+		return false
+	}
+	path = strings.ToLower(path)
+	switch {
+	case strings.Contains(path, "/chat/completions"):
+		return parsed.Get("choices").Exists()
+	case strings.Contains(path, "/embeddings"):
+		return parsed.Get("data").Exists()
+	case strings.Contains(path, "/messages/count_tokens"):
+		return parsed.Get("input_tokens").Exists() || parsed.Get("inputTokens").Exists()
+	case strings.Contains(path, "/messages"):
+		return strings.EqualFold(parsed.Get("type").String(), "message") || parsed.Get("content").Exists()
+	case strings.Contains(path, "/responses"):
+		return strings.HasPrefix(strings.ToLower(parsed.Get("type").String()), "response") || parsed.Get("output").Exists() || strings.HasPrefix(parsed.Get("id").String(), "resp_")
+	case strings.Contains(path, "/v1beta/models/") && strings.Contains(path, ":"):
+		return parsed.Get("candidates").Exists() || parsed.Get("usageMetadata").Exists() || parsed.Get("promptFeedback").Exists()
+	case strings.HasSuffix(path, "/v1beta/models"):
+		return parsed.Get("models").Exists()
+	case strings.HasSuffix(path, "/v1/models"):
+		return parsed.Get("data").Exists() || parsed.Get("models").Exists()
+	case strings.Contains(path, "/v1/models/"):
+		return parsed.Get("id").Exists() || parsed.Get("name").Exists()
+	case strings.Contains(path, "/v1beta/models/"):
+		return parsed.Get("name").Exists()
+	default:
+		return false
+	}
+}
+
+func relayRouteStationID(route *RelayRoute) string {
+	if route == nil {
+		return ""
+	}
+	return route.station.ID
+}
+
+type relaySanitizedSSEBody struct {
+	body        io.ReadCloser
+	reader      *bufio.Reader
+	path        string
+	stationID   string
+	pending     []byte
+	terminalErr error
+	done        bool
+}
+
+func newRelaySanitizedSSEBody(body io.ReadCloser, path, stationID string) io.ReadCloser {
+	return &relaySanitizedSSEBody{
+		body:      body,
+		reader:    bufio.NewReader(body),
+		path:      path,
+		stationID: stationID,
+	}
+}
+
+func (r *relaySanitizedSSEBody) Read(destination []byte) (int, error) {
+	for len(r.pending) == 0 && !r.done {
+		event, err := readRelaySSEEvent(r.reader)
+		if err != nil && !errors.Is(err, io.EOF) {
+			logger.L().Warn("relay upstream stream read failed",
+				zap.String("station_id", r.stationID),
+				zap.String("error_type", fmt.Sprintf("%T", err)),
+			)
+			r.pending = relayGenericSSEError(r.path)
+			r.terminalErr = ErrRelayUpstreamFailed
+			r.done = true
+			_ = r.body.Close()
+		} else if len(event) > 0 {
+			if relaySSEErrorEvent(event) {
+				logger.L().Warn("relay upstream returned a streaming error",
+					zap.String("station_id", r.stationID),
+				)
+				r.pending = relayGenericSSEError(r.path)
+				r.terminalErr = ErrRelayUpstreamFailed
+				r.done = true
+				_ = r.body.Close()
+			} else {
+				r.pending = event
+				if errors.Is(err, io.EOF) {
+					r.done = true
+				}
+			}
+		} else if err != nil {
+			r.done = true
+			return 0, err
+		}
+	}
+	if len(r.pending) == 0 {
+		if r.terminalErr != nil {
+			err := r.terminalErr
+			r.terminalErr = nil
+			return 0, err
+		}
+		return 0, io.EOF
+	}
+	count := copy(destination, r.pending)
+	r.pending = r.pending[count:]
+	return count, nil
+}
+
+func (r *relaySanitizedSSEBody) Close() error {
+	r.done = true
+	return r.body.Close()
+}
+
+func readRelaySSEEvent(reader *bufio.Reader) ([]byte, error) {
+	var event []byte
+	for {
+		line, err := reader.ReadBytes('\n')
+		event = append(event, line...)
+		if len(event) > relaySSEEventLimit {
+			return nil, errors.New("relay SSE event exceeded sanitization limit")
+		}
+		if len(line) > 0 && len(bytes.TrimSpace(line)) == 0 {
+			return event, err
+		}
+		if err != nil {
+			return event, err
+		}
+	}
+}
+
+func relaySSEErrorEvent(event []byte) bool {
+	trimmedEvent := bytes.TrimSpace(event)
+	if len(trimmedEvent) == 0 {
+		return false
+	}
+	if bytes.HasPrefix(trimmedEvent, []byte("{")) || bytes.HasPrefix(trimmedEvent, []byte("[")) {
+		return true
+	}
+
+	var data []byte
+	hasFrame := false
+	for _, line := range bytes.Split(event, []byte{'\n'}) {
+		trimmed := bytes.TrimSpace(line)
+		if len(trimmed) == 0 || bytes.HasPrefix(trimmed, []byte(":")) {
+			continue
+		}
+		switch {
+		case bytes.HasPrefix(trimmed, []byte("event:")):
+			hasFrame = true
+			eventName := strings.ToLower(strings.TrimSpace(string(bytes.TrimPrefix(trimmed, []byte("event:")))))
+			if eventName == "error" || strings.Contains(eventName, "failed") || strings.Contains(eventName, "incomplete") || strings.Contains(eventName, "cancel") {
+				return true
+			}
+		case bytes.HasPrefix(trimmed, []byte("data:")):
+			hasFrame = true
+			data = append(data, bytes.TrimSpace(bytes.TrimPrefix(trimmed, []byte("data:")))...)
+		case bytes.HasPrefix(trimmed, []byte("id:")), bytes.HasPrefix(trimmed, []byte("retry:")):
+			hasFrame = true
+		default:
+			return true
+		}
+	}
+	if !hasFrame || len(data) == 0 || bytes.Equal(data, []byte("[DONE]")) {
+		return false
+	}
+	return !gjson.ValidBytes(data) || relayJSONErrorPayload(data)
+}
+
+func relayJSONErrorPayload(payload []byte) bool {
+	if !gjson.ValidBytes(payload) {
+		return false
+	}
+	parsed := gjson.ParseBytes(payload)
+	typeName := strings.ToLower(strings.TrimSpace(parsed.Get("type").String()))
+	status := strings.ToLower(strings.TrimSpace(parsed.Get("response.status").String()))
+	return parsed.Get("error").Exists() || parsed.Get("response.error").Exists() ||
+		typeName == "error" || strings.Contains(typeName, "failed") ||
+		strings.Contains(typeName, "incomplete") || strings.Contains(typeName, "cancel") ||
+		status == "failed" || status == "incomplete" || status == "cancelled" || status == "canceled"
+}
+
+func relayGenericSSEError(path string) []byte {
+	switch {
+	case strings.Contains(path, "/v1beta/"):
+		return []byte("data: {\"error\":{\"code\":502,\"message\":\"Upstream request failed\",\"status\":\"UNAVAILABLE\"}}\n\n")
+	case strings.Contains(path, "/messages"):
+		return []byte("event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"Upstream request failed\"}}\n\n")
+	case strings.Contains(path, "/responses"):
+		return []byte("event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"code\":\"server_error\",\"message\":\"Upstream request failed\"}}}\n\n")
+	default:
+		return []byte("data: {\"error\":{\"type\":\"upstream_error\",\"message\":\"Upstream request failed\"}}\n\n")
+	}
 }
 
 // forward constructs an OpenAI-compatible upstream request with only
@@ -976,7 +1255,7 @@ func (s *RelayStationService) forward(ctx context.Context, account *Account, rou
 	if station.Type == RelayStationTypeAIHub {
 		s.applyAIHubConnectionDefaults(&station)
 	}
-	target, err := relayProxyTarget(station.BaseURL, inbound.URL.Path, inbound.URL.RawQuery)
+	target, err := relayProxyTarget(station.BaseURL, inbound.URL.Path, relayForwardQuery(inbound.URL.Query()).Encode())
 	if err != nil {
 		return nil, err
 	}
@@ -1037,9 +1316,11 @@ func relayProxyTarget(baseURL, inboundPath, rawQuery string) (string, error) {
 	if strings.HasPrefix(requestPath, "/backend-api/codex/") {
 		requestPath = strings.TrimPrefix(requestPath, "/backend-api/codex")
 	}
-	if strings.HasSuffix(basePath, "/v1") && strings.HasPrefix(requestPath, "/v1/") {
+	if strings.HasPrefix(requestPath, "/v1beta/") && strings.HasSuffix(basePath, "/v1") {
+		basePath = strings.TrimSuffix(basePath, "/v1")
+	} else if strings.HasSuffix(basePath, "/v1") && strings.HasPrefix(requestPath, "/v1/") {
 		requestPath = strings.TrimPrefix(requestPath, "/v1")
-	} else if basePath == "" && !strings.HasPrefix(requestPath, "/v1/") {
+	} else if basePath == "" && !strings.HasPrefix(requestPath, "/v1/") && !strings.HasPrefix(requestPath, "/v1beta/") {
 		requestPath = "/v1" + requestPath
 	}
 	parsed.Path = basePath + requestPath
@@ -1048,10 +1329,37 @@ func relayProxyTarget(baseURL, inboundPath, rawQuery string) (string, error) {
 	return parsed.String(), nil
 }
 
+func relayForwardQuery(query url.Values) url.Values {
+	clean := make(url.Values, len(query))
+	for key, values := range query {
+		if relaySensitiveQueryParameter(key) {
+			continue
+		}
+		clean[key] = append([]string(nil), values...)
+	}
+	return clean
+}
+
+func relaySensitiveQueryParameter(key string) bool {
+	name := strings.ToLower(strings.TrimSpace(key))
+	normalized := strings.NewReplacer("-", "_", ".", "_").Replace(name)
+	if normalized == "key" || normalized == "auth" || normalized == "authorization" || normalized == "apikey" || normalized == "api_key" || normalized == "x_api_key" || normalized == "sig" || normalized == "hmac" {
+		return true
+	}
+	for _, marker := range []string{"token", "secret", "credential", "password", "signature", "access", "refresh"} {
+		if strings.Contains(normalized, marker) {
+			return true
+		}
+	}
+	return strings.HasSuffix(normalized, "_key")
+}
+
 func copyRelayHeaders(destination, source http.Header) {
 	allowed := map[string]struct{}{
 		"accept":              {},
 		"accept-language":     {},
+		"anthropic-beta":      {},
+		"anthropic-version":   {},
 		"content-type":        {},
 		"openai-beta":         {},
 		"user-agent":          {},
