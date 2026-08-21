@@ -311,7 +311,7 @@ func (h *OpenAIGatewayHandler) CountTokens(c *gin.Context) {
 			upstreamModel = mappedModel
 			forwardBody = h.gatewayService.ReplaceModelInBody(forwardBody, upstreamModel)
 		}
-		if _, err := forwardRelayGatewayAccount(h.relayService, c.Request.Context(), c, account, derefGroupID(apiKey.GroupID), relayGatewayForwardInput{
+		if _, err := forwardRelayGatewayAccount(h.gatewayService, h.relayService, c.Request.Context(), c, account, derefGroupID(apiKey.GroupID), relayGatewayForwardInput{
 			Body:          forwardBody,
 			Path:          c.Request.URL.Path,
 			OriginalModel: reqModel,
