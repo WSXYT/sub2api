@@ -252,16 +252,17 @@ type RelayStationGroup struct {
 
 // RelayProfitEstimate is a current-price estimate, not historical source attribution.
 type RelayProfitEstimate struct {
-	GroupID          int64    `json:"group_id"`
-	GroupName        string   `json:"group_name"`
-	StationID        string   `json:"station_id"`
-	StationName      string   `json:"station_name"`
-	SourceGroup      string   `json:"source_group"`
-	RateStatus       string   `json:"rate_status"`
-	Requests         int64    `json:"requests"`
-	TotalCost        float64  `json:"total_cost"`
-	DownstreamRate   float64  `json:"downstream_rate"`
-	UpstreamRate     *float64 `json:"upstream_rate,omitempty"`
+	GroupID        int64    `json:"group_id"`
+	GroupName      string   `json:"group_name"`
+	StationID      string   `json:"station_id"`
+	StationName    string   `json:"station_name"`
+	SourceGroup    string   `json:"source_group"`
+	RateStatus     string   `json:"rate_status"`
+	Requests       int64    `json:"requests"`
+	TotalCost      float64  `json:"total_cost"`
+	DownstreamRate float64  `json:"downstream_rate"`
+	UpstreamRate   *float64 `json:"upstream_rate,omitempty"`
+
 	EstimatedRevenue   *float64 `json:"estimated_revenue,omitempty"`
 	EstimatedCost      *float64 `json:"estimated_cost,omitempty"`
 	EstimatedProfit    *float64 `json:"estimated_profit,omitempty"`
@@ -1497,8 +1498,8 @@ func (s *RelayStationService) EstimateProfit(ctx context.Context, start, end tim
 				if account, found := relayAccountsByKey[relayAccountKey(station.ID, binding.GroupID, source.SourceGroup)]; found {
 					stat = usagestats.GroupStat{GroupID: binding.GroupID}
 					accountStats, statsErr := s.usage.GetGroupStatsWithFilters(ctx, start, end, usagestats.UsageLogFilters{
-						AccountID: account.ID,
-						GroupID:   binding.GroupID,
+						AccountID:    account.ID,
+						GroupID:      binding.GroupID,
 						ExcludeAdmin: true,
 					})
 					if statsErr != nil {
