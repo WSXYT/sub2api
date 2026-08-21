@@ -61,15 +61,27 @@ func TestEstimateProfitUsesRelayAccountUsageAndRecordedCost(t *testing.T) {
 	repo := &relayProfitUsageRepo{}
 	service := &RelayStationService{
 		settingRepo: relayProfitSettingRepo{},
-		groupRepo: &relayGroupMultiplierRepo{groups: map[int64]*Group{1: {ID: 1, Name: "relay", RateMultiplier: 0.5}}},
-		accountRepo: &relayNativeAccountRepo{accounts: []Account{{ID: 7, Extra: map[string]any{relayAccountMarkerKey: true, relayAccountKeyKey: accountKey}}}},
+		groupRepo: &relayGroupMultiplierRepo{groups: map[int64]*Group{
+			1: {ID: 1, Name: "relay", RateMultiplier: 0.5},
+		}},
+		accountRepo: &relayNativeAccountRepo{accounts: []Account{{
+			ID: 7,
+			Extra: map[string]any{relayAccountMarkerKey: true, relayAccountKeyKey: accountKey},
+		}}},
 		usage: &UsageService{usageRepo: repo},
 		loaded: true,
 		config: relayStationConfig{
 			Stations: []relayStation{{ID: "station", Enabled: true}},
-			Bindings: []RelayGroupBinding{{GroupID: 1, Sources: []RelayStationSource{{StationID: "station", SourceGroup: "default", Enabled: true}}}},
+			Bindings: []RelayGroupBinding{{
+				GroupID: 1,
+				Sources: []RelayStationSource{{
+					StationID: "station", SourceGroup: "default", Enabled: true,
+				}},
+			}},
 		},
-		rates: relayRateCache{Rates: map[string]map[string]RelayStationRate{"station": {"default": {Rate: &rate, Status: RelayRateStatusReady}}}},
+		rates: relayRateCache{Rates: map[string]map[string]RelayStationRate{
+			"station": {"default": {Rate: &rate, Status: RelayRateStatusReady}},
+		}},
 	}
 
 	estimates, err := service.EstimateProfit(context.Background(), time.Now().Add(-time.Hour), time.Now())

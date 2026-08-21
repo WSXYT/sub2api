@@ -262,11 +262,11 @@ type RelayProfitEstimate struct {
 	TotalCost        float64  `json:"total_cost"`
 	DownstreamRate   float64  `json:"downstream_rate"`
 	UpstreamRate     *float64 `json:"upstream_rate,omitempty"`
-	EstimatedRevenue    *float64 `json:"estimated_revenue,omitempty"`
-	EstimatedCost       *float64 `json:"estimated_cost,omitempty"`
-	EstimatedProfit     *float64 `json:"estimated_profit,omitempty"`
-	ActualUpstreamCost  *float64 `json:"actual_upstream_cost,omitempty"`
-	ActualProfit        *float64 `json:"actual_profit,omitempty"`
+	EstimatedRevenue   *float64 `json:"estimated_revenue,omitempty"`
+	EstimatedCost      *float64 `json:"estimated_cost,omitempty"`
+	EstimatedProfit    *float64 `json:"estimated_profit,omitempty"`
+	ActualUpstreamCost *float64 `json:"actual_upstream_cost,omitempty"`
+	ActualProfit       *float64 `json:"actual_profit,omitempty"`
 }
 
 type relayRouteCacheEntry struct {
