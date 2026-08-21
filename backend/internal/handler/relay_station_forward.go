@@ -39,6 +39,15 @@ func (h *OpenAIGatewayHandler) forwardRelayOpenAIAccount(
 	if err != nil {
 		return nil, relayGatewayFailoverError(account, 0)
 	}
+	if h.gatewayService != nil {
+		latest, vetoed, _ := h.gatewayService.OpenAIProfitControlVetoLatest(ctx, account)
+		if vetoed {
+			return nil, relayGatewayFailoverError(account, 0)
+		}
+		if latest != nil {
+			account = latest
+		}
+	}
 	inbound := relayGatewayInboundRequest(ctx, c, input)
 	startedAt := time.Now()
 	response, err := h.relayService.ForwardAccount(ctx, account, route, inbound)
@@ -61,10 +70,11 @@ func (h *GatewayHandler) forwardRelayAccount(
 	input relayGatewayForwardInput,
 	streamStarted *bool,
 ) (*service.ForwardResult, error) {
-	return forwardRelayGatewayAccount(h.relayService, ctx, c, account, groupID, input, streamStarted)
+	return forwardRelayGatewayAccount(h.gatewayService, h.relayService, ctx, c, account, groupID, input, streamStarted)
 }
 
 func forwardRelayGatewayAccount(
+	gatewayService *service.GatewayService,
 	relayService *service.RelayStationService,
 	ctx context.Context,
 	c *gin.Context,
@@ -83,6 +93,15 @@ func forwardRelayGatewayAccount(
 		}
 		return nil, relayGatewayFailoverError(account, 0)
 	}
+	if gatewayService != nil {
+		latest, vetoed, _ := gatewayService.GatewayProfitControlVetoLatest(ctx, account)
+		if vetoed {
+			return nil, relayGatewayFailoverError(account, 0)
+		}
+		if latest != nil {
+			account = latest
+		}
+	}
 
 	inbound := relayGatewayInboundRequest(ctx, c, input)
 	startedAt := time.Now()
@@ -100,10 +119,11 @@ func forwardRelayGatewayAccount(
 	}
 
 	result := &service.ForwardResult{
-		RequestID:     response.Header.Get("x-request-id"),
-		Model:         input.OriginalModel,
-		UpstreamModel: input.UpstreamModel,
-		Stream:        input.Stream,
+		RequestID:         response.Header.Get("x-request-id"),
+		Model:             input.OriginalModel,
+		SelectedRelayRate: service.RelaySelectedRate(response.Header),
+		UpstreamModel:     input.UpstreamModel,
+		Stream:            input.Stream,
 	}
 	copyRelayResponseHeaders(c.Writer.Header(), response.Header)
 	c.Status(response.StatusCode)
@@ -217,9 +237,10 @@ func forwardRelayOpenAIResponse(
 	streamStarted *bool,
 ) (*service.OpenAIForwardResult, error) {
 	result := &service.OpenAIForwardResult{
-		RequestID:        response.Header.Get("x-request-id"),
-		Model:            input.OriginalModel,
-		UpstreamModel:    input.UpstreamModel,
+		RequestID:         response.Header.Get("x-request-id"),
+		Model:             input.OriginalModel,
+		SelectedRelayRate: service.RelaySelectedRate(response.Header),
+		UpstreamModel:     input.UpstreamModel,
 		UpstreamEndpoint: c.Request.URL.Path,
 		ResponseHeaders:  response.Header.Clone(),
 	}

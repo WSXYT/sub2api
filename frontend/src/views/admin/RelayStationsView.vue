@@ -525,6 +525,12 @@
                 {{ formatCurrency(value) }}
               </span>
             </template>
+            <template #cell-actual_upstream_cost="{ value }">{{ formatCurrency(value) }}</template>
+            <template #cell-actual_profit="{ value }">
+              <span :class="profitValueClass(value)" class="font-semibold">
+                {{ formatCurrency(value) }}
+              </span>
+            </template>
             <template #empty>
               <EmptyState
                 :title="t('admin.relayStations.profit.noData')"
@@ -888,7 +894,9 @@ const profitColumns = computed<Column[]>(() => [
   { key: 'upstream_rate', label: t('admin.relayStations.columns.upstreamRate') },
   { key: 'estimated_revenue', label: t('admin.relayStations.columns.revenue') },
   { key: 'estimated_cost', label: t('admin.relayStations.columns.cost') },
-  { key: 'estimated_profit', label: t('admin.relayStations.columns.profit'), sortable: true }
+  { key: 'estimated_profit', label: t('admin.relayStations.columns.profit'), sortable: true },
+  { key: 'actual_upstream_cost', label: t('admin.relayStations.columns.actualCost'), sortable: true },
+  { key: 'actual_profit', label: t('admin.relayStations.columns.actualProfit'), sortable: true }
 ])
 
 const stationTypeOptions = computed(() =>

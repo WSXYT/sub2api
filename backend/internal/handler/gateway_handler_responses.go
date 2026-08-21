@@ -271,7 +271,7 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 				forwardBody = h.gatewayService.ReplaceModelInBody(forwardBody, mappedModel)
 				upstreamModel = mappedModel
 			}
-			result, err = h.forwardRelayAccount(requestCtx, c, account, derefGroupID(apiKey.GroupID), relayGatewayForwardInput{
+			result, err = h.forwardRelayAccount(admissionCtx, c, account, derefGroupID(apiKey.GroupID), relayGatewayForwardInput{
 				Body:          forwardBody,
 				Path:          c.Request.URL.Path,
 				OriginalModel: reqModel,

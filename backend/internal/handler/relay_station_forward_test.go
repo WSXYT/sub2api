@@ -104,13 +104,14 @@ func TestCopyRelayResponseHeadersHidesUpstreamIdentity(t *testing.T) {
 		"Server":              []string{"secret-provider"},
 		"Via":                 []string{"secret-relay"},
 		"X-Upstream-Provider": []string{"secret-provider"},
+		"X-Aihub-Auto-Rate":   []string{"0.03"},
 	}
 	copyRelayResponseHeaders(destination, source)
 
 	if destination.Get("Content-Type") != "application/json" || destination.Get("Content-Disposition") != "" {
 		t.Fatalf("response headers were not canonicalized: %#v", destination)
 	}
-	for _, key := range []string{"Set-Cookie", "Server", "Via", "X-Upstream-Provider", "Content-Encoding"} {
+	for _, key := range []string{"Set-Cookie", "Server", "Via", "X-Upstream-Provider", "Content-Encoding", "X-Aihub-Auto-Rate"} {
 		if destination.Get(key) != "" {
 			t.Fatalf("upstream identity header %s was copied: %#v", key, destination)
 		}

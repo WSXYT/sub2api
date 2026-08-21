@@ -111,6 +111,8 @@ export interface RelayProfitEstimate {
 	estimated_revenue?: number | null;
 	estimated_cost?: number | null;
 	estimated_profit?: number | null;
+	actual_upstream_cost?: number | null;
+	actual_profit?: number | null;
 }
 
 interface StationMutationResult {

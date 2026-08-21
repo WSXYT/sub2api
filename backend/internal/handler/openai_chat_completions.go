@@ -233,6 +233,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 			forwardBody = h.gatewayService.ReplaceModelInBody(body, channelMapping.MappedModel)
 		}
 		writerSizeBeforeForward := c.Writer.Size()
+		admissionCtx := service.ContextWithSelectionProfitGate(c.Request.Context(), selection)
 		result, err := func() (*service.OpenAIForwardResult, error) {
 			defer func() {
 				if accountReleaseFunc != nil {
@@ -248,7 +249,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 					forwardBody = h.gatewayService.ReplaceModelInBody(forwardBody, mappedModel)
 					upstreamModel = mappedModel
 				}
-				return h.forwardRelayOpenAIAccount(c.Request.Context(), c, account, derefGroupID(apiKey.GroupID), relayGatewayForwardInput{
+				return h.forwardRelayOpenAIAccount(admissionCtx, c, account, derefGroupID(apiKey.GroupID), relayGatewayForwardInput{
 					Body:          forwardBody,
 					Path:          c.Request.URL.Path,
 					OriginalModel: reqModel,

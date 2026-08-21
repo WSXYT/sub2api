@@ -606,6 +606,9 @@ type AudioUsage struct {
 type ForwardResult struct {
 	RequestID string
 	Usage     ClaudeUsage
+	// SelectedRelayRate is the upstream rate returned by a managed relay in the
+	// same forwarding response. Nil means the station does not provide it.
+	SelectedRelayRate *float64
 	Model     string
 	// UpstreamModel is the actual upstream model after mapping.
 	// Prefer empty when it is identical to Model; persistence normalizes equal values away as no-op mappings.

@@ -14,6 +14,26 @@ import (
 	"time"
 )
 
+func TestRelaySelectedRateAcceptsOnlyFiniteNonNegativeValues(t *testing.T) {
+	headers := make(http.Header)
+	for value, expected := range map[string]*float64{
+		"0.03": pointer(0.03),
+		"":     nil,
+		"-1":   nil,
+		"NaN":  nil,
+		"+Inf": nil,
+		"bad":  nil,
+	} {
+		headers.Set("x-aihub-auto-rate", value)
+		actual := RelaySelectedRate(headers)
+		if expected == nil && actual != nil || expected != nil && (actual == nil || *actual != *expected) {
+			t.Fatalf("RelaySelectedRate(%q) = %v, want %v", value, actual, expected)
+		}
+	}
+}
+
+func pointer(value float64) *float64 { return &value }
+
 func TestRateReadyForRouteRejectsStaleCache(t *testing.T) {
 	rate := 0.1
 	if rateReadyForRoute(RelayStationRate{Rate: &rate, Status: RelayRateStatusReady, UpdatedAt: time.Now().Add(-3 * relayStationRatePollInterval)}, time.Now()) {
@@ -68,6 +88,47 @@ func TestForwardAccountHidesUpstreamErrors(t *testing.T) {
 	statusCode, ok := RelayUpstreamStatus(err)
 	if !ok || statusCode != http.StatusTeapot {
 		t.Fatalf("ForwardAccount() lost internal retry status: %d, %v", statusCode, ok)
+	}
+}
+
+func TestForwardAccountStripsUntrustedRelayRate(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("x-aihub-auto-rate", "999")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"chatcmpl_1","choices":[]}`))
+	}))
+	defer upstream.Close()
+
+	service := &RelayStationService{}
+	inbound, _ := http.NewRequest(http.MethodPost, "http://sub2api.test/v1/chat/completions", nil)
+	response, err := service.ForwardAccount(context.Background(), &Account{}, &RelayRoute{
+		station: relayStation{ID: "private", Type: RelayStationTypeSub2API, BaseURL: upstream.URL, ProxyToken: "token"},
+		source:  RelayStationSource{SourceGroup: "default"},
+	}, inbound)
+	if err != nil {
+		t.Fatalf("ForwardAccount() error = %v", err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.Header.Get("x-aihub-auto-rate") != "" {
+		t.Fatalf("untrusted relay rate was retained: %#v", response.Header)
+	}
+}
+
+func TestForwardAccountRequiresManagedAIHubRate(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"chatcmpl_1","choices":[]}`))
+	}))
+	defer upstream.Close()
+
+	service := &RelayStationService{activeAIHubStations: map[string]struct{}{"aihub": {}}}
+	inbound, _ := http.NewRequest(http.MethodPost, "http://sub2api.test/v1/chat/completions", nil)
+	response, err := service.ForwardAccount(context.Background(), &Account{}, &RelayRoute{
+		station: relayStation{ID: "aihub", Type: RelayStationTypeAIHub, BaseURL: upstream.URL},
+		source:  RelayStationSource{SourceGroup: "default"},
+	}, inbound)
+	if response != nil || !errors.Is(err, ErrRelayUpstreamFailed) {
+		t.Fatalf("ForwardAccount() = response %#v, error %v; want missing-rate failure", response, err)
 	}
 }
 

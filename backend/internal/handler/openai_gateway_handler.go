@@ -671,6 +671,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		// 用扣除非语义心跳字节的口径快照：心跳注释不构成语义响应，
 		// 不能因心跳字节变化而放弃 failover 换号（#3887）。
 		writerSizeBeforeForward := service.OpenAICompactKeepaliveAdjustedWrittenSize(c)
+		admissionCtx := service.ContextWithSelectionProfitGate(c.Request.Context(), selection)
 		// 跨 passthrough 边界的 failover：从 Kiro 等透传账号切到 Bedrock 等非透传账号前，
 		// 从不可变的 canonical forwardBody 派生本次尝试 body 并整块剔除上游私有的加密
 		// reasoning item（含耦合的 id/summary），避免非透传上游 400 拒绝 Kiro reasoning 形态。
@@ -687,7 +688,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					attemptBody = h.gatewayService.ReplaceModelInBody(attemptBody, mappedModel)
 					upstreamModel = mappedModel
 				}
-				return h.forwardRelayOpenAIAccount(c.Request.Context(), c, account, derefGroupID(apiKey.GroupID), relayGatewayForwardInput{
+				return h.forwardRelayOpenAIAccount(admissionCtx, c, account, derefGroupID(apiKey.GroupID), relayGatewayForwardInput{
 					Body:          attemptBody,
 					Path:          c.Request.URL.Path,
 					OriginalModel: reqModel,
@@ -2192,6 +2193,15 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		}
 
 		account := selection.Account
+		if account.IsRelay() {
+			// Responses WebSocket has no relay transport; never send relay-native
+			// identities through GetRequestCredential with empty station credentials.
+			if selection.ReleaseFunc != nil {
+				selection.ReleaseFunc()
+			}
+			failedAccountIDs[account.ID] = struct{}{}
+			continue
+		}
 		accountMaxConcurrency := account.Concurrency
 		if selection.WaitPlan != nil && selection.WaitPlan.MaxConcurrency > 0 {
 			accountMaxConcurrency = selection.WaitPlan.MaxConcurrency

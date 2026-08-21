@@ -8,10 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -985,6 +987,26 @@ func (s *RelayStationService) ForwardAccount(ctx context.Context, account *Accou
 		return nil, relayUpstreamFailure(0)
 	}
 	if response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices {
+		if route.station.Type == RelayStationTypeAIHub {
+			rawRate := RelaySelectedRate(response.Header)
+			if rawRate == nil {
+				_ = response.Body.Close()
+				logger.L().Warn("managed AIHub response omitted valid selected rate", zap.String("station_id", relayRouteStationID(route)))
+				return nil, relayUpstreamFailure(0)
+			}
+			effectiveRate, routeable := relayEffectiveRate(RelayStationRate{Rate: rawRate, Status: RelayRateStatusReady}, route.source)
+			if !routeable {
+				_ = response.Body.Close()
+				logger.L().Warn("managed AIHub selected rate is not routeable", zap.String("station_id", relayRouteStationID(route)))
+				return nil, relayUpstreamFailure(0)
+			}
+			response.Header.Set("x-aihub-auto-rate", strconv.FormatFloat(effectiveRate, 'g', -1, 64))
+			if account != nil {
+				account.setRelayEffectiveRate(effectiveRate, time.Now())
+			}
+		} else {
+			response.Header.Del("x-aihub-auto-rate")
+		}
 		if encoding := strings.TrimSpace(strings.ToLower(response.Header.Get("Content-Encoding"))); encoding != "" && encoding != "identity" {
 			_ = response.Body.Close()
 			logger.L().Warn("relay upstream returned unsupported content encoding",
@@ -1302,6 +1324,17 @@ func (s *RelayStationService) forward(ctx context.Context, account *Account, rou
 	}
 	outbound.Header.Set("Authorization", "Bearer "+proxyToken)
 	return newRelayProxyClient().Do(outbound)
+}
+
+// RelaySelectedRate returns trusted same-decision metadata after ForwardAccount
+// has validated its managed AIHub source and stripped the header for other stations.
+func RelaySelectedRate(headers http.Header) *float64 {
+	value := strings.TrimSpace(headers.Get("x-aihub-auto-rate"))
+	rate, err := strconv.ParseFloat(value, 64)
+	if value == "" || err != nil || rate < 0 || math.IsNaN(rate) || math.IsInf(rate, 0) {
+		return nil
+	}
+	return &rate
 }
 
 func relayProxyTarget(baseURL, inboundPath, rawQuery string) (string, error) {

@@ -583,6 +583,9 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRelay(
 		return nil, errOpenAICyberPolicyForwarded
 	}
 	if result != nil {
+		if rate := RelaySelectedRate(response.Header); rate != nil {
+			result.SelectedRelayRate = rate
+		}
 		if serviceTier != "" {
 			result.ServiceTier = &serviceTier
 		}

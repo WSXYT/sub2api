@@ -262,9 +262,11 @@ type RelayProfitEstimate struct {
 	TotalCost        float64  `json:"total_cost"`
 	DownstreamRate   float64  `json:"downstream_rate"`
 	UpstreamRate     *float64 `json:"upstream_rate,omitempty"`
-	EstimatedRevenue *float64 `json:"estimated_revenue,omitempty"`
-	EstimatedCost    *float64 `json:"estimated_cost,omitempty"`
-	EstimatedProfit  *float64 `json:"estimated_profit,omitempty"`
+	EstimatedRevenue    *float64 `json:"estimated_revenue,omitempty"`
+	EstimatedCost       *float64 `json:"estimated_cost,omitempty"`
+	EstimatedProfit     *float64 `json:"estimated_profit,omitempty"`
+	ActualUpstreamCost  *float64 `json:"actual_upstream_cost,omitempty"`
+	ActualProfit        *float64 `json:"actual_profit,omitempty"`
 }
 
 type relayRouteCacheEntry struct {
@@ -1453,6 +1455,23 @@ func (s *RelayStationService) EstimateProfit(ctx context.Context, start, end tim
 	for _, stat := range stats {
 		statsByGroup[stat.GroupID] = stat
 	}
+	// Relay accounts are the only durable source-to-request identity. Querying
+	// them separately prevents one local group total from being duplicated across
+	// every configured source row when stations use different upstream prices.
+	var relayAccountsByKey map[string]Account
+	if s.accountRepo != nil {
+		accounts, findErr := s.accountRepo.FindByExtraField(ctx, relayAccountMarkerKey, true)
+		if findErr != nil {
+			return nil, findErr
+		}
+		relayAccountsByKey = make(map[string]Account, len(accounts))
+		for _, account := range accounts {
+			key := account.GetExtraString(relayAccountKeyKey)
+			if key != "" {
+				relayAccountsByKey[key] = account
+			}
+		}
+	}
 
 	configSnapshot := s.snapshotConfig()
 	rateSnapshot := s.snapshotRates()
@@ -1463,7 +1482,7 @@ func (s *RelayStationService) EstimateProfit(ctx context.Context, start, end tim
 		if groupErr != nil || group == nil {
 			continue
 		}
-		stat := statsByGroup[binding.GroupID]
+		groupStat := statsByGroup[binding.GroupID]
 		for _, source := range binding.Sources {
 			if !source.Enabled {
 				continue
@@ -1471,6 +1490,25 @@ func (s *RelayStationService) EstimateProfit(ctx context.Context, start, end tim
 			station, ok := stationByID[source.StationID]
 			if !ok || !station.Enabled {
 				continue
+			}
+			stat := groupStat
+			actualCostAvailable := false
+			if relayAccountsByKey != nil {
+				if account, found := relayAccountsByKey[relayAccountKey(station.ID, binding.GroupID, source.SourceGroup)]; found {
+					stat = usagestats.GroupStat{GroupID: binding.GroupID}
+					accountStats, statsErr := s.usage.GetGroupStatsWithFilters(ctx, start, end, usagestats.UsageLogFilters{
+						AccountID: account.ID,
+						GroupID:   binding.GroupID,
+						ExcludeAdmin: true,
+					})
+					if statsErr != nil {
+						return nil, statsErr
+					}
+					if len(accountStats) > 0 {
+						stat = accountStats[0]
+					}
+					actualCostAvailable = true
+				}
 			}
 			rate := rateSnapshot.Rates[source.StationID][source.SourceGroup]
 			estimate := RelayProfitEstimate{
@@ -1484,14 +1522,20 @@ func (s *RelayStationService) EstimateProfit(ctx context.Context, start, end tim
 				TotalCost:      stat.Cost,
 				DownstreamRate: group.RateMultiplier,
 			}
-			if upstreamRate, ok := relayEffectiveRate(rate, source); ok {
-				revenue := stat.Cost * group.RateMultiplier
+			revenue := stat.Cost * group.RateMultiplier
+			if upstreamRate, routeable := relayEffectiveRate(rate, source); routeable {
 				cost := stat.Cost * upstreamRate
 				profit := revenue - cost
 				estimate.UpstreamRate = &upstreamRate
 				estimate.EstimatedRevenue = &revenue
 				estimate.EstimatedCost = &cost
 				estimate.EstimatedProfit = &profit
+			}
+			if actualCostAvailable {
+				actualCost := stat.AccountCost
+				actualProfit := revenue - actualCost
+				estimate.ActualUpstreamCost = &actualCost
+				estimate.ActualProfit = &actualProfit
 			}
 			result = append(result, estimate)
 		}

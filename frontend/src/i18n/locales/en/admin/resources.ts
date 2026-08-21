@@ -614,7 +614,7 @@ export default {
         name: 'Name', type: 'Type', address: 'Address', balance: 'Balance', status: 'Status', actions: 'Actions',
         station: 'Relay Station', priority: 'Priority', adjustment: 'Price Adjustment', accountPools: 'AIHub Plans', mode: 'Routing Mode',
         priceBand: 'Rate Range', enabled: 'Enabled', rate: 'Collected Rate', effectiveRate: 'Effective Rate', updatedAt: 'Collected At', group: 'Group',
-        requests: 'Requests', totalCost: 'Base Cost', downstreamRate: 'Downstream Rate', upstreamRate: 'Upstream Rate', revenue: 'Est. Revenue', cost: 'Est. Cost', profit: 'Est. Profit'
+        requests: 'Requests', totalCost: 'Base Cost', downstreamRate: 'Downstream Rate', upstreamRate: 'Upstream Rate', revenue: 'Est. Revenue', cost: 'Est. Cost', profit: 'Est. Profit', actualCost: 'Recorded Upstream Cost', actualProfit: 'Recorded Profit'
       },
       types: { aihub: 'aihub-auto', newapi: 'New API', sub2api: 'Official Sub2API' },
       status: { enabled: 'Enabled', disabled: 'Disabled', configured: 'Configured', active: 'Active', inactive: 'Inactive', ready: 'Ready', unauthenticated: 'Authentication Failed', unavailable: 'Unavailable', stale: 'Stale', unknown: 'No Data' },
