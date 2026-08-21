@@ -237,7 +237,7 @@ type OpenAIForwardResult struct {
 	// SelectedRelayRate is the upstream rate returned by a managed relay in the
 	// same forwarding response. Nil means the station does not provide it.
 	SelectedRelayRate *float64
-	Model      string // 原始模型（用于响应和日志显示）
+	Model             string // 原始模型（用于响应和日志显示）
 	// BillingModel is the model used for cost calculation.
 	// When non-empty, CalculateCost uses this instead of Model.
 	// This is set by the Anthropic Messages conversion path where

@@ -241,8 +241,8 @@ func forwardRelayOpenAIResponse(
 		Model:             input.OriginalModel,
 		SelectedRelayRate: service.RelaySelectedRate(response.Header),
 		UpstreamModel:     input.UpstreamModel,
-		UpstreamEndpoint: c.Request.URL.Path,
-		ResponseHeaders:  response.Header.Clone(),
+		UpstreamEndpoint:  c.Request.URL.Path,
+		ResponseHeaders:   response.Header.Clone(),
 	}
 	copyRelayResponseHeaders(c.Writer.Header(), response.Header)
 	c.Status(response.StatusCode)
