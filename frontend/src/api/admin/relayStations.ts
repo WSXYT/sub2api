@@ -75,6 +75,8 @@ export interface RelayAccount {
 	priority: number;
 	rate_status: RelayRateStatus;
 	effective_rate?: number | null;
+	suggested_group_id?: number | null;
+	suggested_rate?: number | null;
 	balance?: number | null;
 }
 
@@ -94,6 +96,8 @@ export interface RelayRate {
 	status: RelayRateStatus;
 	rate: number | null;
 	effective_rate?: number | null;
+	suggested_group_id?: number | null;
+	suggested_rate?: number | null;
 	updated_at: string;
 }
 

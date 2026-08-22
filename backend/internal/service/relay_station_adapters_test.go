@@ -34,6 +34,43 @@ func TestRelaySelectedRateAcceptsOnlyFiniteNonNegativeValues(t *testing.T) {
 
 func pointer(value float64) *float64 { return &value }
 
+func TestPrepareRequestRateLimitUsesAIHubRawCeiling(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPost, "http://relay/v1/chat/completions", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delta := 0.02
+	adjust := true
+	route := &RelayRoute{
+		station: relayStation{Type: RelayStationTypeAIHub},
+		source:  RelayStationSource{AdjustRate: &adjust, Delta: delta},
+	}
+	if err := (&RelayStationService{}).PrepareRequestRateLimit(req, route, 0.1); err != nil {
+		t.Fatalf("PrepareRequestRateLimit() error = %v", err)
+	}
+	if got := req.Header.Get(relayMaxRateHeader); got != "0.08" {
+		t.Fatalf("max-rate header = %q, want 0.08", got)
+	}
+}
+
+func TestPrepareRequestRateLimitRejectsNonAIHubOverLimit(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPost, "http://relay/v1/chat/completions", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rate := 0.2
+	route := &RelayRoute{
+		station:       relayStation{Type: RelayStationTypeNewAPI},
+		effectiveRate: rate,
+	}
+	if err := (&RelayStationService{}).PrepareRequestRateLimit(req, route, 0.1); !errors.Is(err, ErrRelayPriceExceeded) {
+		t.Fatalf("PrepareRequestRateLimit() error = %v, want ErrRelayPriceExceeded", err)
+	}
+	if got := req.Header.Get(relayMaxRateHeader); got != "" {
+		t.Fatalf("non-AIHub request received max-rate header %q", got)
+	}
+}
+
 func TestRateReadyForRouteRejectsStaleCache(t *testing.T) {
 	rate := 0.1
 	if rateReadyForRoute(RelayStationRate{Rate: &rate, Status: RelayRateStatusReady, UpdatedAt: time.Now().Add(-3 * relayStationRatePollInterval)}, time.Now()) {
@@ -799,7 +836,7 @@ func TestFetchAIHubRatesReadsCurrentAndNamedCandidates(t *testing.T) {
 		if r.URL.Path != "/ctl/status" {
 			t.Fatalf("unexpected aihub endpoint: %s", r.URL.Path)
 		}
-		_, _ = w.Write([]byte(`{"currentGroupId":2,"currentCode":"premium","candidates":[{"groupId":1,"code":"standard","rate":0.1},{"groupId":2,"code":"premium","rate":0.2},{"groupId":3,"code":"blocked","rate":0.3,"excluded":true}]}`))
+		_, _ = w.Write([]byte(`{"currentGroupId":2,"currentCode":"premium","suggestedGroupId":2,"suggestedRate":0.2,"candidates":[{"groupId":1,"code":"standard","rate":0.1},{"groupId":2,"code":"premium","rate":0.2},{"groupId":3,"code":"blocked","rate":0.3,"excluded":true}]}`))
 	}))
 	defer upstream.Close()
 
@@ -812,6 +849,9 @@ func TestFetchAIHubRatesReadsCurrentAndNamedCandidates(t *testing.T) {
 	for _, sourceGroup := range []string{"default", "premium"} {
 		if rate := rates[sourceGroup].Rate; rate == nil || *rate != 0.2 || rates[sourceGroup].Status != RelayRateStatusReady {
 			t.Fatalf("%s rate = %#v, want ready 0.2", sourceGroup, rates[sourceGroup])
+		}
+		if rates[sourceGroup].SuggestedGroupID == nil || *rates[sourceGroup].SuggestedGroupID != 2 || rates[sourceGroup].SuggestedRate == nil || *rates[sourceGroup].SuggestedRate != 0.2 {
+			t.Fatalf("%s suggestion = %#v, want group 2 rate 0.2", sourceGroup, rates[sourceGroup])
 		}
 	}
 	for _, sourceGroup := range []string{"blocked", "missing"} {

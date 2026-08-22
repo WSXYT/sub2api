@@ -26,11 +26,13 @@ const (
 
 	relayStationRatePollInterval = time.Minute
 	relayStationRouteTTL         = 5 * time.Minute
+	relayMaxRateHeader           = "X-Sub2API-Max-Rate"
 )
 
 var (
 	ErrRelayStationNotFound = infraerrors.NotFound("RELAY_STATION_NOT_FOUND", "relay station not found")
 	ErrRelayRouteNotFound   = errors.New("relay route is not configured")
+	ErrRelayPriceExceeded   = errors.New("relay price exceeds request limit")
 	ErrRelayRateUnavailable = infraerrors.New(http.StatusBadGateway, "RELAY_RATE_UNAVAILABLE", "no relay source has a current price")
 	ErrRelayUpstreamFailed  = errors.New("upstream request failed")
 )
@@ -202,10 +204,12 @@ type relayStationConfig struct {
 
 // RelayStationRate is the raw station rate before the binding delta is applied.
 type RelayStationRate struct {
-	Rate            *float64  `json:"rate"`
-	Status          string    `json:"status"`
-	SupportedModels []string  `json:"supported_models,omitempty"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	Rate             *float64  `json:"rate"`
+	Status           string    `json:"status"`
+	SupportedModels  []string  `json:"supported_models,omitempty"`
+	SuggestedGroupID *int64    `json:"suggested_group_id,omitempty"`
+	SuggestedRate    *float64  `json:"suggested_rate,omitempty"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 type relayRateCache struct {
@@ -215,29 +219,33 @@ type relayRateCache struct {
 
 // RelayRateView is the administrator-facing rate cache view.
 type RelayRateView struct {
-	StationID     string    `json:"station_id"`
-	StationName   string    `json:"station_name"`
-	SourceGroup   string    `json:"source_group"`
-	Status        string    `json:"status"`
-	Rate          *float64  `json:"rate"`
-	EffectiveRate *float64  `json:"effective_rate,omitempty"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	StationID        string    `json:"station_id"`
+	StationName      string    `json:"station_name"`
+	SourceGroup      string    `json:"source_group"`
+	Status           string    `json:"status"`
+	Rate             *float64  `json:"rate"`
+	EffectiveRate    *float64  `json:"effective_rate,omitempty"`
+	SuggestedGroupID *int64    `json:"suggested_group_id,omitempty"`
+	SuggestedRate    *float64  `json:"suggested_rate,omitempty"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 // RelayAccountView exposes a relay binding in Account Management without
 // pretending its credentials are a native sub2api account.
 type RelayAccountView struct {
-	StationID     string           `json:"station_id"`
-	StationName   string           `json:"station_name"`
-	StationType   RelayStationType `json:"station_type"`
-	GroupID       int64            `json:"group_id"`
-	GroupName     string           `json:"group_name"`
-	SourceGroup   string           `json:"source_group"`
-	Enabled       bool             `json:"enabled"`
-	Priority      int              `json:"priority"`
-	RateStatus    string           `json:"rate_status"`
-	EffectiveRate *float64         `json:"effective_rate,omitempty"`
-	Balance       *float64         `json:"balance,omitempty"`
+	StationID        string           `json:"station_id"`
+	StationName      string           `json:"station_name"`
+	StationType      RelayStationType `json:"station_type"`
+	GroupID          int64            `json:"group_id"`
+	GroupName        string           `json:"group_name"`
+	SourceGroup      string           `json:"source_group"`
+	Enabled          bool             `json:"enabled"`
+	Priority         int              `json:"priority"`
+	RateStatus       string           `json:"rate_status"`
+	EffectiveRate    *float64         `json:"effective_rate,omitempty"`
+	SuggestedGroupID *int64           `json:"suggested_group_id,omitempty"`
+	SuggestedRate    *float64         `json:"suggested_rate,omitempty"`
+	Balance          *float64         `json:"balance,omitempty"`
 }
 
 type RelayAccountUpdateInput struct {
@@ -332,6 +340,33 @@ func (r *RelayRoute) EffectiveRate() float64 {
 		return 0
 	}
 	return r.effectiveRate
+}
+
+// PrepareRequestRateLimit applies the request-local effective price ceiling.
+// AIHub receives the raw ceiling and enforces it with its own live router state;
+// other stations are rejected here when their selected source is already too expensive.
+func (s *RelayStationService) PrepareRequestRateLimit(inbound *http.Request, route *RelayRoute, effectiveLimit float64) error {
+	if inbound == nil || route == nil || math.IsNaN(effectiveLimit) || math.IsInf(effectiveLimit, 0) || effectiveLimit < 0 {
+		return ErrRelayPriceExceeded
+	}
+	if route.station.Type != RelayStationTypeAIHub && route.effectiveRate > effectiveLimit+1e-9 {
+		return ErrRelayPriceExceeded
+	}
+	if route.station.Type != RelayStationTypeAIHub {
+		return nil
+	}
+	rawLimit := effectiveLimit
+	if route.source.AdjustRate == nil || *route.source.AdjustRate {
+		rawLimit -= route.source.Delta
+	}
+	if route.source.MaxRate != nil && *route.source.MaxRate < rawLimit {
+		rawLimit = *route.source.MaxRate
+	}
+	if rawLimit < 0 || math.IsNaN(rawLimit) || math.IsInf(rawLimit, 0) {
+		return ErrRelayPriceExceeded
+	}
+	inbound.Header.Set(relayMaxRateHeader, strconv.FormatFloat(rawLimit, 'g', -1, 64))
+	return nil
 }
 
 // RelayStationService owns relay configuration, price snapshots, sticky route
@@ -882,15 +917,17 @@ func (s *RelayStationService) ListRelayAccounts(ctx context.Context) ([]RelayAcc
 			}
 			rate := rateSnapshot.Rates[source.StationID][source.SourceGroup]
 			account := RelayAccountView{
-				StationID:   station.ID,
-				StationName: station.Name,
-				StationType: station.Type,
-				GroupID:     binding.GroupID,
-				GroupName:   groupName,
-				SourceGroup: source.SourceGroup,
-				Enabled:     station.Enabled && source.Enabled,
-				Priority:    source.Priority,
-				RateStatus:  rate.Status,
+				StationID:        station.ID,
+				StationName:      station.Name,
+				StationType:      station.Type,
+				GroupID:          binding.GroupID,
+				GroupName:        groupName,
+				SourceGroup:      source.SourceGroup,
+				Enabled:          station.Enabled && source.Enabled,
+				Priority:         source.Priority,
+				RateStatus:       rate.Status,
+				SuggestedGroupID: cloneInt64Pointer(rate.SuggestedGroupID),
+				SuggestedRate:    cloneFloat64(rate.SuggestedRate),
 			}
 			if effective, ok := relayEffectiveRate(rate, source); ok {
 				account.EffectiveRate = &effective
@@ -1143,6 +1180,8 @@ func (s *RelayStationService) syncNativeRelayRates(ctx context.Context, snapshot
 			updates := map[string]any{
 				"relay_rate_updated_at":        rate.UpdatedAt.Format(time.RFC3339Nano),
 				"relay_effective_rate":         nil,
+				"relay_suggested_group_id":     rate.SuggestedGroupID,
+				"relay_suggested_rate":         rate.SuggestedRate,
 				"relay_station_type":           string(station.Type),
 				"relay_model_capability_known": station.Type == RelayStationTypeAIHub && rate.SupportedModels != nil,
 				"relay_supported_models":       rate.SupportedModels,
@@ -1299,12 +1338,14 @@ func (s *RelayStationService) listRates(onlyStationID string) []RelayRateView {
 			}
 			rate := rateSnapshot.Rates[source.StationID][source.SourceGroup]
 			view := RelayRateView{
-				StationID:   station.ID,
-				StationName: station.Name,
-				SourceGroup: source.SourceGroup,
-				Status:      rate.Status,
-				Rate:        cloneFloat64(rate.Rate),
-				UpdatedAt:   rate.UpdatedAt,
+				StationID:        station.ID,
+				StationName:      station.Name,
+				SourceGroup:      source.SourceGroup,
+				Status:           rate.Status,
+				Rate:             cloneFloat64(rate.Rate),
+				SuggestedGroupID: cloneInt64Pointer(rate.SuggestedGroupID),
+				SuggestedRate:    cloneFloat64(rate.SuggestedRate),
+				UpdatedAt:        rate.UpdatedAt,
 			}
 			if effective, ok := relayEffectiveRate(rate, source); ok {
 				view.EffectiveRate = &effective

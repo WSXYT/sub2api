@@ -34,6 +34,29 @@ func (s *GatewayService) ResolveUserGroupRateMultiplier(ctx context.Context, use
 	return s.getUserGroupRateMultiplier(ctx, userID, groupID, groupDefaultMultiplier)
 }
 
+// RequestRateMultiplier returns the request's current downstream multiplier.
+// Relay admission uses this value as the default upstream price ceiling.
+func (s *GatewayService) RequestRateMultiplier(ctx context.Context, groupID int64) float64 {
+	group := gatewayTokenRequestBillingGroupFromContext(ctx)
+	if group == nil {
+		if candidate, ok := ctx.Value(ctxkey.Group).(*Group); ok && IsGroupContextValid(candidate) {
+			group = candidate
+		}
+	}
+	if group == nil {
+		return 1
+	}
+	resolved := group.RateMultiplier
+	if userID, _ := ctx.Value(ctxkey.UserID).(int64); userID > 0 {
+		resolved = s.ResolveUserGroupRateMultiplier(ctx, userID, group.ID, group.RateMultiplier)
+	}
+	pricingAt, ok := gatewayTokenRequestPricingAtFromContext(ctx)
+	if !ok {
+		pricingAt = timezone.Now()
+	}
+	return resolved * group.PeakMultiplierAt(pricingAt)
+}
+
 // RecordUsageInput 记录使用量的输入参数。
 // 异步 worker 只接收计费所需快照，不能持有 ParsedRequest/RequestBodyRef 这类大请求体引用。
 type RecordUsageInput struct {

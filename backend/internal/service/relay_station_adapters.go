@@ -182,9 +182,11 @@ func (s *RelayStationService) fetchAIHubRates(ctx context.Context, station relay
 	}
 
 	var payload struct {
-		CurrentGroupID *int64                      `json:"currentGroupId"`
-		CurrentCode    string                      `json:"currentCode"`
-		Candidates     []relayAIHubStatusCandidate `json:"candidates"`
+		CurrentGroupID   *int64                      `json:"currentGroupId"`
+		CurrentCode      string                      `json:"currentCode"`
+		SuggestedGroupID *int64                      `json:"suggestedGroupId"`
+		SuggestedRate    *float64                    `json:"suggestedRate"`
+		Candidates       []relayAIHubStatusCandidate `json:"candidates"`
 	}
 	if err := decodeRelayJSON(resp.Body, &payload); err != nil {
 		return nil, err
@@ -198,7 +200,10 @@ func (s *RelayStationService) fetchAIHubRates(ctx context.Context, station relay
 	result := make(map[string]RelayStationRate, len(required))
 	for sourceGroup := range required {
 		if sourceGroup == "default" {
-			result[sourceGroup] = aggregateAIHubRouterRate(payload.Candidates)
+			rate := aggregateAIHubRouterRate(payload.Candidates)
+			rate.SuggestedGroupID = cloneInt64Pointer(payload.SuggestedGroupID)
+			rate.SuggestedRate = cloneFloat64(payload.SuggestedRate)
+			result[sourceGroup] = rate
 			continue
 		}
 		candidate, found := candidates[sourceGroup]
@@ -206,7 +211,7 @@ func (s *RelayStationService) fetchAIHubRates(ctx context.Context, station relay
 			result[sourceGroup] = RelayStationRate{Status: RelayRateStatusUnavailable}
 			continue
 		}
-		result[sourceGroup] = RelayStationRate{Rate: cloneFloat64(candidate.Rate), Status: RelayRateStatusReady, SupportedModels: append([]string(nil), candidate.Models...)}
+		result[sourceGroup] = RelayStationRate{Rate: cloneFloat64(candidate.Rate), Status: RelayRateStatusReady, SupportedModels: append([]string(nil), candidate.Models...), SuggestedGroupID: cloneInt64Pointer(payload.SuggestedGroupID), SuggestedRate: cloneFloat64(payload.SuggestedRate)}
 	}
 	return result, nil
 }
@@ -1307,6 +1312,9 @@ func (s *RelayStationService) forward(ctx context.Context, account *Account, rou
 		}
 		if token := strings.TrimSpace(station.ProxyToken); token != "" {
 			outbound.Header.Set("Authorization", "Bearer "+token)
+		}
+		if maxRate := strings.TrimSpace(inbound.Header.Get(relayMaxRateHeader)); maxRate != "" {
+			outbound.Header.Set(relayMaxRateHeader, maxRate)
 		}
 		outbound.Header.Set("X-Sub2api-Group", route.source.SourceGroup)
 		return newRelayProxyClient().Do(outbound)

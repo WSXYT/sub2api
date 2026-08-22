@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"go.uber.org/zap"
@@ -115,6 +116,29 @@ func (s *OpenAIGatewayService) ResolveUserGroupRateMultiplier(ctx context.Contex
 		resolver = newUserGroupRateResolver(nil, nil, resolveUserGroupRateCacheTTL(s.cfg), nil, "service.openai_gateway")
 	}
 	return resolver.Resolve(ctx, userID, groupID, groupDefaultMultiplier)
+}
+
+// RequestRateMultiplier returns the request's current downstream multiplier.
+// Relay admission uses this value as the default upstream price ceiling.
+func (s *OpenAIGatewayService) RequestRateMultiplier(ctx context.Context, groupID int64) float64 {
+	group := gatewayTokenRequestBillingGroupFromContext(ctx)
+	if group == nil {
+		if candidate, ok := ctx.Value(ctxkey.Group).(*Group); ok && IsGroupContextValid(candidate) {
+			group = candidate
+		}
+	}
+	if group == nil {
+		return 1
+	}
+	resolved := group.RateMultiplier
+	if userID, _ := ctx.Value(ctxkey.UserID).(int64); userID > 0 {
+		resolved = s.ResolveUserGroupRateMultiplier(ctx, userID, group.ID, group.RateMultiplier)
+	}
+	pricingAt, ok := openAIPricingAtFromContext(ctx)
+	if !ok {
+		pricingAt = timezone.Now()
+	}
+	return resolved * group.PeakMultiplierAt(pricingAt)
 }
 
 // openAIUsagePricingAt 返回本次用量记录使用的定价时刻：优先请求级 PricingAt

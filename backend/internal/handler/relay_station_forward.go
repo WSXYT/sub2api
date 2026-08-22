@@ -49,6 +49,11 @@ func (h *OpenAIGatewayHandler) forwardRelayOpenAIAccount(
 		}
 	}
 	inbound := relayGatewayInboundRequest(ctx, c, input)
+	if h.gatewayService != nil {
+		if err := h.relayService.PrepareRequestRateLimit(inbound, route, h.gatewayService.RequestRateMultiplier(ctx, groupID)); err != nil {
+			return nil, relayGatewayFailoverError(account, 0)
+		}
+	}
 	startedAt := time.Now()
 	response, err := h.relayService.ForwardAccount(ctx, account, route, inbound)
 	if err != nil {
@@ -104,6 +109,11 @@ func forwardRelayGatewayAccount(
 	}
 
 	inbound := relayGatewayInboundRequest(ctx, c, input)
+	if gatewayService != nil {
+		if err := relayService.PrepareRequestRateLimit(inbound, route, gatewayService.RequestRateMultiplier(ctx, groupID)); err != nil {
+			return nil, relayGatewayFailoverError(account, 0)
+		}
+	}
 	startedAt := time.Now()
 	response, err := relayService.ForwardAccount(ctx, account, route, inbound)
 	if err != nil {
