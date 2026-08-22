@@ -922,15 +922,15 @@ func (s *RelayStationService) ListRelayAccounts(ctx context.Context) ([]RelayAcc
 			}
 			rate := rateSnapshot.Rates[source.StationID][source.SourceGroup]
 			account := RelayAccountView{
-				StationID:        station.ID,
-				StationName:      station.Name,
-				StationType:      station.Type,
-				GroupID:          binding.GroupID,
-				GroupName:        groupName,
-				SourceGroup:      source.SourceGroup,
-				Enabled:          station.Enabled && source.Enabled,
-				Priority:         source.Priority,
-				RateStatus:       rate.Status,
+				StationID:          station.ID,
+				StationName:        station.Name,
+				StationType:        station.Type,
+				GroupID:            binding.GroupID,
+				GroupName:          groupName,
+				SourceGroup:        source.SourceGroup,
+				Enabled:            station.Enabled && source.Enabled,
+				Priority:           source.Priority,
+				RateStatus:         rate.Status,
 				SuggestedGroupID:   cloneInt64Pointer(rate.SuggestedGroupID),
 				SuggestedGroupCode: rate.SuggestedGroupCode,
 				SuggestedRate:      cloneFloat64(rate.SuggestedRate),
@@ -1184,11 +1184,11 @@ func (s *RelayStationService) syncNativeRelayRates(ctx context.Context, snapshot
 			}
 			rate := rates.Rates[source.StationID][source.SourceGroup]
 			updates := map[string]any{
-				"relay_rate_updated_at":         rate.UpdatedAt.Format(time.RFC3339Nano),
-				"relay_effective_rate":          nil,
-				"relay_suggested_group_id":      rate.SuggestedGroupID,
-				"relay_suggested_group_code":    rate.SuggestedGroupCode,
-				"relay_suggested_rate":          rate.SuggestedRate,
+				"relay_rate_updated_at":        rate.UpdatedAt.Format(time.RFC3339Nano),
+				"relay_effective_rate":         nil,
+				"relay_suggested_group_id":     rate.SuggestedGroupID,
+				"relay_suggested_group_code":   rate.SuggestedGroupCode,
+				"relay_suggested_rate":         rate.SuggestedRate,
 				"relay_station_type":           string(station.Type),
 				"relay_model_capability_known": station.Type == RelayStationTypeAIHub && rate.SupportedModels != nil,
 				"relay_supported_models":       rate.SupportedModels,
@@ -1345,15 +1345,15 @@ func (s *RelayStationService) listRates(onlyStationID string) []RelayRateView {
 			}
 			rate := rateSnapshot.Rates[source.StationID][source.SourceGroup]
 			view := RelayRateView{
-				StationID:        station.ID,
-				StationName:      station.Name,
-				SourceGroup:      source.SourceGroup,
-				Status:           rate.Status,
+				StationID:          station.ID,
+				StationName:        station.Name,
+				SourceGroup:        source.SourceGroup,
+				Status:             rate.Status,
 				Rate:               cloneFloat64(rate.Rate),
 				SuggestedGroupID:   cloneInt64Pointer(rate.SuggestedGroupID),
 				SuggestedGroupCode: rate.SuggestedGroupCode,
 				SuggestedRate:      cloneFloat64(rate.SuggestedRate),
-				UpdatedAt:        rate.UpdatedAt,
+				UpdatedAt:          rate.UpdatedAt,
 			}
 			if effective, ok := relayEffectiveRate(rate, source); ok {
 				view.EffectiveRate = &effective
