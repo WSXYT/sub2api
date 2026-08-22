@@ -930,7 +930,7 @@ func (s *RelayStationService) ListRelayAccounts(ctx context.Context) ([]RelayAcc
 				SourceGroup:      source.SourceGroup,
 				Enabled:          station.Enabled && source.Enabled,
 				Priority:         source.Priority,
-				RateStatus:         rate.Status,
+				RateStatus:       rate.Status,
 				SuggestedGroupID:   cloneInt64Pointer(rate.SuggestedGroupID),
 				SuggestedGroupCode: rate.SuggestedGroupCode,
 				SuggestedRate:      cloneFloat64(rate.SuggestedRate),
