@@ -288,6 +288,13 @@
               >
                 {{ getRelaySupportedModels(row) ? t('admin.accounts.relay.supportedModels', { models: getRelaySupportedModels(row) }) : t('admin.accounts.relay.allModels') }}
               </span>
+              <span
+                v-if="getRelaySuggestedRoute(row)"
+                class="max-w-[14rem] truncate pl-0.5 text-[11px] leading-4 text-primary-600 dark:text-primary-400"
+                :title="getRelaySuggestedRoute(row) || ''"
+              >
+                {{ t('admin.accounts.relay.currentRoute', { route: getRelaySuggestedRoute(row) }) }}
+              </span>
             </div>
           </template>
           <template #cell-capacity="{ row }">
@@ -1681,6 +1688,15 @@ function getRelaySupportedModels(row: Account): string | null {
   const models = extra.relay_supported_models
   if (!Array.isArray(models)) return ''
   return models.filter((model): model is string => typeof model === 'string' && model.trim() !== '').join(', ')
+}
+
+function getRelaySuggestedRoute(row: Account): string | null {
+  const extra = row.extra as Record<string, unknown> | undefined
+  if (extra?.relay_account !== true || typeof extra.relay_suggested_group_code !== 'string' || !extra.relay_suggested_group_code.trim()) return null
+  const rate = Number(extra.relay_suggested_rate)
+  return Number.isFinite(rate)
+    ? `${extra.relay_suggested_group_code.trim()} (${formatSchedulerScore(rate)})`
+    : extra.relay_suggested_group_code.trim()
 }
 
 function getOpenAICompactTitle(row: any): string {

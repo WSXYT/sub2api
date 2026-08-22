@@ -28,6 +28,7 @@ const (
 	relayStationRatePollInterval = time.Minute
 	relayStationRouteTTL         = 5 * time.Minute
 	relayMaxRateHeader           = "X-Sub2API-Max-Rate"
+	relayAIHubAccountHeader      = "X-AIHub-Account-ID"
 )
 
 var (
@@ -205,12 +206,13 @@ type relayStationConfig struct {
 
 // RelayStationRate is the raw station rate before the binding delta is applied.
 type RelayStationRate struct {
-	Rate             *float64  `json:"rate"`
-	Status           string    `json:"status"`
-	SupportedModels  []string  `json:"supported_models,omitempty"`
-	SuggestedGroupID *int64    `json:"suggested_group_id,omitempty"`
-	SuggestedRate    *float64  `json:"suggested_rate,omitempty"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	Rate               *float64  `json:"rate"`
+	Status             string    `json:"status"`
+	SupportedModels    []string  `json:"supported_models,omitempty"`
+	SuggestedGroupID   *int64    `json:"suggested_group_id,omitempty"`
+	SuggestedGroupCode string    `json:"suggested_group_code,omitempty"`
+	SuggestedRate      *float64  `json:"suggested_rate,omitempty"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 type relayRateCache struct {
@@ -220,33 +222,35 @@ type relayRateCache struct {
 
 // RelayRateView is the administrator-facing rate cache view.
 type RelayRateView struct {
-	StationID        string    `json:"station_id"`
-	StationName      string    `json:"station_name"`
-	SourceGroup      string    `json:"source_group"`
-	Status           string    `json:"status"`
-	Rate             *float64  `json:"rate"`
-	EffectiveRate    *float64  `json:"effective_rate,omitempty"`
-	SuggestedGroupID *int64    `json:"suggested_group_id,omitempty"`
-	SuggestedRate    *float64  `json:"suggested_rate,omitempty"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	StationID          string    `json:"station_id"`
+	StationName        string    `json:"station_name"`
+	SourceGroup        string    `json:"source_group"`
+	Status             string    `json:"status"`
+	Rate               *float64  `json:"rate"`
+	EffectiveRate      *float64  `json:"effective_rate,omitempty"`
+	SuggestedGroupID   *int64    `json:"suggested_group_id,omitempty"`
+	SuggestedGroupCode string    `json:"suggested_group_code,omitempty"`
+	SuggestedRate      *float64  `json:"suggested_rate,omitempty"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 // RelayAccountView exposes a relay binding in Account Management without
 // pretending its credentials are a native sub2api account.
 type RelayAccountView struct {
-	StationID        string           `json:"station_id"`
-	StationName      string           `json:"station_name"`
-	StationType      RelayStationType `json:"station_type"`
-	GroupID          int64            `json:"group_id"`
-	GroupName        string           `json:"group_name"`
-	SourceGroup      string           `json:"source_group"`
-	Enabled          bool             `json:"enabled"`
-	Priority         int              `json:"priority"`
-	RateStatus       string           `json:"rate_status"`
-	EffectiveRate    *float64         `json:"effective_rate,omitempty"`
-	SuggestedGroupID *int64           `json:"suggested_group_id,omitempty"`
-	SuggestedRate    *float64         `json:"suggested_rate,omitempty"`
-	Balance          *float64         `json:"balance,omitempty"`
+	StationID          string           `json:"station_id"`
+	StationName        string           `json:"station_name"`
+	StationType        RelayStationType `json:"station_type"`
+	GroupID            int64            `json:"group_id"`
+	GroupName          string           `json:"group_name"`
+	SourceGroup        string           `json:"source_group"`
+	Enabled            bool             `json:"enabled"`
+	Priority           int              `json:"priority"`
+	RateStatus         string           `json:"rate_status"`
+	EffectiveRate      *float64         `json:"effective_rate,omitempty"`
+	SuggestedGroupID   *int64           `json:"suggested_group_id,omitempty"`
+	SuggestedGroupCode string           `json:"suggested_group_code,omitempty"`
+	SuggestedRate      *float64         `json:"suggested_rate,omitempty"`
+	Balance            *float64         `json:"balance,omitempty"`
 }
 
 type RelayAccountUpdateInput struct {
@@ -926,9 +930,10 @@ func (s *RelayStationService) ListRelayAccounts(ctx context.Context) ([]RelayAcc
 				SourceGroup:      source.SourceGroup,
 				Enabled:          station.Enabled && source.Enabled,
 				Priority:         source.Priority,
-				RateStatus:       rate.Status,
-				SuggestedGroupID: cloneInt64Pointer(rate.SuggestedGroupID),
-				SuggestedRate:    cloneFloat64(rate.SuggestedRate),
+				RateStatus:         rate.Status,
+				SuggestedGroupID:   cloneInt64Pointer(rate.SuggestedGroupID),
+				SuggestedGroupCode: rate.SuggestedGroupCode,
+				SuggestedRate:      cloneFloat64(rate.SuggestedRate),
 			}
 			if effective, ok := relayEffectiveRate(rate, source); ok {
 				account.EffectiveRate = &effective
@@ -1179,10 +1184,11 @@ func (s *RelayStationService) syncNativeRelayRates(ctx context.Context, snapshot
 			}
 			rate := rates.Rates[source.StationID][source.SourceGroup]
 			updates := map[string]any{
-				"relay_rate_updated_at":        rate.UpdatedAt.Format(time.RFC3339Nano),
-				"relay_effective_rate":         nil,
-				"relay_suggested_group_id":     rate.SuggestedGroupID,
-				"relay_suggested_rate":         rate.SuggestedRate,
+				"relay_rate_updated_at":         rate.UpdatedAt.Format(time.RFC3339Nano),
+				"relay_effective_rate":          nil,
+				"relay_suggested_group_id":      rate.SuggestedGroupID,
+				"relay_suggested_group_code":    rate.SuggestedGroupCode,
+				"relay_suggested_rate":          rate.SuggestedRate,
 				"relay_station_type":           string(station.Type),
 				"relay_model_capability_known": station.Type == RelayStationTypeAIHub && rate.SupportedModels != nil,
 				"relay_supported_models":       rate.SupportedModels,
@@ -1343,9 +1349,10 @@ func (s *RelayStationService) listRates(onlyStationID string) []RelayRateView {
 				StationName:      station.Name,
 				SourceGroup:      source.SourceGroup,
 				Status:           rate.Status,
-				Rate:             cloneFloat64(rate.Rate),
-				SuggestedGroupID: cloneInt64Pointer(rate.SuggestedGroupID),
-				SuggestedRate:    cloneFloat64(rate.SuggestedRate),
+				Rate:               cloneFloat64(rate.Rate),
+				SuggestedGroupID:   cloneInt64Pointer(rate.SuggestedGroupID),
+				SuggestedGroupCode: rate.SuggestedGroupCode,
+				SuggestedRate:      cloneFloat64(rate.SuggestedRate),
 				UpdatedAt:        rate.UpdatedAt,
 			}
 			if effective, ok := relayEffectiveRate(rate, source); ok {
@@ -1692,6 +1699,10 @@ func (s *RelayStationService) persistAllLocked(ctx context.Context, config relay
 	return nil
 }
 
+func isManagedAIHubRouter(raw string) bool {
+	return strings.TrimRight(strings.TrimSpace(raw), "/") == managedAIHubRouterURL
+}
+
 func (s *RelayStationService) validateConfig(candidate *relayStationConfig) error {
 	if candidate == nil {
 		return infraerrors.BadRequest("RELAY_CONFIG_INVALID", "relay station configuration is required")
@@ -1708,8 +1719,8 @@ func (s *RelayStationService) validateConfig(candidate *relayStationConfig) erro
 		}
 		if station.Type == RelayStationTypeAIHub && station.ControlURL != "" {
 			router := strings.TrimRight(station.ControlURL, "/")
-			if existingID, exists := aihubRouters[router]; exists {
-				return infraerrors.BadRequest("RELAY_AIHUB_ROUTER_DUPLICATE", "each aihub account requires its own aihub-auto router instance: "+existingID)
+			if existingID, exists := aihubRouters[router]; exists && !isManagedAIHubRouter(router) {
+				return infraerrors.BadRequest("RELAY_AIHUB_ROUTER_DUPLICATE", "each external aihub account requires its own aihub-auto router instance: "+existingID)
 			}
 			aihubRouters[router] = station.ID
 		}

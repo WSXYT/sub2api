@@ -438,6 +438,14 @@
                 <p class="font-mono font-medium text-gray-900 dark:text-white">
                   {{ formatRate(rateForSource(row)?.rate) }}
                 </p>
+                <p
+                  v-if="stationById(row.station_id)?.type === 'aihub' && rateForSource(row)?.suggested_group_code"
+                  class="text-xs text-primary-600 dark:text-primary-400"
+                >
+                  {{ t('admin.relayStations.binding.autoSelect') }}: {{ rateForSource(row)?.suggested_group_code }} ({{ formatRate(suggestedEffectiveRate(row)) }})
+                  {{ rateForSource(row)?.suggested_group_code }}
+                  ({{ formatRate(suggestedEffectiveRate(row)) }})
+                </p>
                 <span :class="['badge', rateStatusClass(rateForSource(row)?.status)]">
                   {{ rateStatusLabel(rateForSource(row)?.status) }}
                 </span>
@@ -1044,6 +1052,17 @@ function rateForSource(source: RelayStationSource): RelayRate | undefined {
 
 function sourceEffectiveRate(source: RelayStationSource): number | null {
   return effectiveRelayRate(rateForSource(source), source.delta, source.max_rate, sourceAdjustmentEnabled(source))
+}
+
+function suggestedEffectiveRate(source: RelayStationSource): number | null {
+  const rate = rateForSource(source)
+  if (rate?.suggested_rate == null) return null
+  return effectiveRelayRate(
+    { ...rate, rate: rate.suggested_rate },
+    source.delta,
+    source.max_rate,
+    sourceAdjustmentEnabled(source)
+  )
 }
 
 function sourceAdjustmentEnabled(source: RelayStationSource): boolean {

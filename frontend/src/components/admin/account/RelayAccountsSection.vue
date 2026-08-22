@@ -46,7 +46,10 @@
             </td>
             <td class="px-4 py-3">
               <div>{{ account.group_name }}</div>
-              <div v-if="account.station_type !== 'aihub'" class="mt-0.5 text-xs text-gray-500 dark:text-dark-300">
+              <div v-if="account.station_type === 'aihub' && account.suggested_group_code" class="mt-0.5 text-xs text-primary-600 dark:text-primary-400">
+                {{ t('admin.relayStations.binding.autoSelect') }}: {{ account.suggested_group_code }} ({{ formatRate(account.suggested_rate) }})
+              </div>
+              <div v-else-if="account.station_type !== 'aihub'" class="mt-0.5 text-xs text-gray-500 dark:text-dark-300">
                 {{ account.source_group }}
               </div>
             </td>

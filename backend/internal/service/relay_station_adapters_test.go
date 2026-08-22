@@ -627,6 +627,9 @@ func TestSyncAIHubConfigPostsNativePolicy(t *testing.T) {
 		if r.Header.Get("x-ui-password") != "ui-password" {
 			t.Error("aihub config request did not authenticate")
 		}
+		if r.Header.Get(relayAIHubAccountHeader) != "aihub" {
+			t.Errorf("aihub config request account header = %q", r.Header.Get(relayAIHubAccountHeader))
+		}
 		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
 			t.Errorf("decode config: %v", err)
 		}
@@ -678,6 +681,23 @@ func TestValidateAIHubPriceBandRejectsInvalidRange(t *testing.T) {
 	}
 	if err := service.validateConfig(&candidate); err == nil {
 		t.Fatal("invalid AIHub price band was accepted")
+	}
+}
+
+func TestValidateConfigAllowsMultipleManagedAIHubStations(t *testing.T) {
+	service := &RelayStationService{}
+	candidate := relayStationConfig{
+		Stations: []relayStation{
+			{ID: "aihub-1", Type: RelayStationTypeAIHub, Name: "AIHub 1", Username: "one@example.com"},
+			{ID: "aihub-2", Type: RelayStationTypeAIHub, Name: "AIHub 2", Username: "two@example.com"},
+		},
+		Bindings: []RelayGroupBinding{
+			{GroupID: 1, Sources: []RelayStationSource{{StationID: "aihub-1", Enabled: true}}},
+			{GroupID: 2, Sources: []RelayStationSource{{StationID: "aihub-2", Enabled: true}}},
+		},
+	}
+	if err := service.validateConfig(&candidate); err != nil {
+		t.Fatalf("managed AIHub stations sharing the local router were rejected: %v", err)
 	}
 }
 
@@ -836,7 +856,7 @@ func TestFetchAIHubRatesReadsCurrentAndNamedCandidates(t *testing.T) {
 		if r.URL.Path != "/ctl/status" {
 			t.Fatalf("unexpected aihub endpoint: %s", r.URL.Path)
 		}
-		_, _ = w.Write([]byte(`{"currentGroupId":2,"currentCode":"premium","suggestedGroupId":2,"suggestedRate":0.2,"candidates":[{"groupId":1,"code":"standard","rate":0.1},{"groupId":2,"code":"premium","rate":0.2},{"groupId":3,"code":"blocked","rate":0.3,"excluded":true}]}`))
+		_, _ = w.Write([]byte(`{"currentGroupId":2,"currentCode":"premium","suggestedGroupId":2,"suggestedCode":"premium","suggestedRate":0.2,"candidates":[{"groupId":1,"code":"standard","rate":0.1},{"groupId":2,"code":"premium","rate":0.2},{"groupId":3,"code":"blocked","rate":0.3,"excluded":true}]}`))
 	}))
 	defer upstream.Close()
 
@@ -850,7 +870,7 @@ func TestFetchAIHubRatesReadsCurrentAndNamedCandidates(t *testing.T) {
 		if rate := rates[sourceGroup].Rate; rate == nil || *rate != 0.2 || rates[sourceGroup].Status != RelayRateStatusReady {
 			t.Fatalf("%s rate = %#v, want ready 0.2", sourceGroup, rates[sourceGroup])
 		}
-		if rates[sourceGroup].SuggestedGroupID == nil || *rates[sourceGroup].SuggestedGroupID != 2 || rates[sourceGroup].SuggestedRate == nil || *rates[sourceGroup].SuggestedRate != 0.2 {
+		if rates[sourceGroup].SuggestedGroupID == nil || *rates[sourceGroup].SuggestedGroupID != 2 || rates[sourceGroup].SuggestedGroupCode != "premium" || rates[sourceGroup].SuggestedRate == nil || *rates[sourceGroup].SuggestedRate != 0.2 {
 			t.Fatalf("%s suggestion = %#v, want group 2 rate 0.2", sourceGroup, rates[sourceGroup])
 		}
 	}

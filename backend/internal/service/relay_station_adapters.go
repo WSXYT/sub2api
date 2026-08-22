@@ -168,6 +168,7 @@ func (s *RelayStationService) fetchAIHubRates(ctx context.Context, station relay
 		return nil, err
 	}
 	req.Header.Set("x-ui-password", station.UIPassword)
+	req.Header.Set(relayAIHubAccountHeader, station.ID)
 	client, err := newRelayControlClient()
 	if err != nil {
 		return nil, err
@@ -185,6 +186,7 @@ func (s *RelayStationService) fetchAIHubRates(ctx context.Context, station relay
 		CurrentGroupID   *int64                      `json:"currentGroupId"`
 		CurrentCode      string                      `json:"currentCode"`
 		SuggestedGroupID *int64                      `json:"suggestedGroupId"`
+		SuggestedCode    string                      `json:"suggestedCode"`
 		SuggestedRate    *float64                    `json:"suggestedRate"`
 		Candidates       []relayAIHubStatusCandidate `json:"candidates"`
 	}
@@ -202,6 +204,7 @@ func (s *RelayStationService) fetchAIHubRates(ctx context.Context, station relay
 		if sourceGroup == "default" {
 			rate := aggregateAIHubRouterRate(payload.Candidates)
 			rate.SuggestedGroupID = cloneInt64Pointer(payload.SuggestedGroupID)
+			rate.SuggestedGroupCode = payload.SuggestedCode
 			rate.SuggestedRate = cloneFloat64(payload.SuggestedRate)
 			result[sourceGroup] = rate
 			continue
@@ -211,7 +214,7 @@ func (s *RelayStationService) fetchAIHubRates(ctx context.Context, station relay
 			result[sourceGroup] = RelayStationRate{Status: RelayRateStatusUnavailable}
 			continue
 		}
-		result[sourceGroup] = RelayStationRate{Rate: cloneFloat64(candidate.Rate), Status: RelayRateStatusReady, SupportedModels: append([]string(nil), candidate.Models...), SuggestedGroupID: cloneInt64Pointer(payload.SuggestedGroupID), SuggestedRate: cloneFloat64(payload.SuggestedRate)}
+		result[sourceGroup] = RelayStationRate{Rate: cloneFloat64(candidate.Rate), Status: RelayRateStatusReady, SupportedModels: append([]string(nil), candidate.Models...), SuggestedGroupID: cloneInt64Pointer(payload.SuggestedGroupID), SuggestedGroupCode: payload.SuggestedCode, SuggestedRate: cloneFloat64(payload.SuggestedRate)}
 	}
 	return result, nil
 }
@@ -243,6 +246,7 @@ func (s *RelayStationService) fetchAIHubBalance(ctx context.Context, station rel
 		return nil, err
 	}
 	req.Header.Set("x-ui-password", station.UIPassword)
+	req.Header.Set(relayAIHubAccountHeader, station.ID)
 	client, err := newRelayControlClient()
 	if err != nil {
 		return nil, err
@@ -307,6 +311,7 @@ func (s *RelayStationService) loginAIHubStation(ctx context.Context, station rel
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-ui-password", station.UIPassword)
+	req.Header.Set(relayAIHubAccountHeader, station.ID)
 	client, err := newRelayControlClient()
 	if err != nil {
 		return err
@@ -712,6 +717,7 @@ func (s *RelayStationService) postAIHubConfigRequest(ctx context.Context, statio
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-ui-password", station.UIPassword)
+	req.Header.Set(relayAIHubAccountHeader, station.ID)
 	client, err := newRelayControlClient()
 	if err != nil {
 		return err
@@ -1316,6 +1322,7 @@ func (s *RelayStationService) forward(ctx context.Context, account *Account, rou
 		if maxRate := strings.TrimSpace(inbound.Header.Get(relayMaxRateHeader)); maxRate != "" {
 			outbound.Header.Set(relayMaxRateHeader, maxRate)
 		}
+		outbound.Header.Set(relayAIHubAccountHeader, station.ID)
 		outbound.Header.Set("X-Sub2api-Group", route.source.SourceGroup)
 		return newRelayProxyClient().Do(outbound)
 	}
