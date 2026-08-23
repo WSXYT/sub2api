@@ -4615,6 +4615,8 @@ const handleSubmit = async () => {
     updatePayload.auto_pause_on_expired = autoPauseOnExpired.value
     if (isRelayAccount.value) {
       delete updatePayload.rate_multiplier
+      // Relay Stations owns the binding; ordinary account edits must not try to rewrite it.
+      delete updatePayload.group_ids
     }
     if (props.account.type === 'apikey' && !isRelayAccount.value) {
       updatePayload.upstream_billing_probe_enabled = upstreamBillingAutoProbeEnabled.value

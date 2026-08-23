@@ -578,9 +578,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		if input.Type != "" && input.Type != account.Type {
 			return nil, infraerrors.BadRequest("RELAY_ACCOUNT_TYPE_MANAGED", "relay account type is managed by Relay Stations")
 		}
-		if input.GroupIDs != nil {
-			return nil, infraerrors.BadRequest("RELAY_ACCOUNT_GROUP_MANAGED", "relay account group is managed by Relay Stations")
-		}
+		// Relay Stations owns the binding. Ignore group_ids from generic account
+		// forms so editing ordinary relay controls does not fail on a no-op bind.
+		input.GroupIDs = nil
 		if input.RateMultiplier != nil {
 			return nil, infraerrors.BadRequest("RELAY_ACCOUNT_RATE_MANAGED", "relay account rate is managed by Relay Stations")
 		}

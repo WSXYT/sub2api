@@ -161,6 +161,33 @@ func (a *Account) IsRelay() bool {
 	return ok && value
 }
 
+// RelaySourcePriority returns the Relay Stations priority used by the
+// account-management surface. The scheduler may store a translated priority
+// on the native Account, so callers should prefer this value for display/editing.
+func (a *Account) RelaySourcePriority() (int, bool) {
+	if a == nil || !a.IsRelay() || a.Extra == nil {
+		return 0, false
+	}
+	value, ok := a.Extra[relaySourcePriorityKey]
+	if ok {
+		return ParseExtraInt(value), true
+	}
+	// Legacy relay identities predate the display snapshot and only have the
+	// translated native priority persisted.
+	priority, err := relaySourcePriorityForNative(a.Priority)
+	if err != nil {
+		return 0, false
+	}
+	return priority, true
+}
+
+func (a *Account) RelayPolicyKey() string {
+	if a == nil {
+		return ""
+	}
+	return a.GetExtraString(relayPolicyKeyKey)
+}
+
 func (a *Account) RelayStationID() string {
 	if a == nil {
 		return ""

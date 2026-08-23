@@ -1004,7 +1004,7 @@ func (h *AccountHandler) Update(c *gin.Context) {
 				response.ErrorFrom(c, infraerrors.New(http.StatusServiceUnavailable, "RELAY_SERVICE_UNAVAILABLE", "relay station service is unavailable"))
 				return
 			}
-			if err := h.relayService.UpdateRelayAccountNativePriority(c.Request.Context(), managedAccount, *req.Priority); err != nil {
+			if err := h.relayService.UpdateRelayAccountSourcePriority(c.Request.Context(), managedAccount, *req.Priority); err != nil {
 				response.ErrorFrom(c, err)
 				return
 			}

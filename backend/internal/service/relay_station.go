@@ -257,8 +257,9 @@ type RelayAccountView struct {
 }
 
 type RelayAccountUpdateInput struct {
-	Enabled  *bool
-	Priority *int
+	Enabled   *bool
+	Priority  *int
+	PolicyKey string
 }
 
 // RelayStationGroup is an upstream group that can be selected in a binding.
@@ -431,6 +432,7 @@ const (
 	relayStationIDKey     = "relay_station_id"
 	relayGroupIDKey       = "relay_group_id"
 	relaySourceGroupKey   = "relay_source_group"
+	relaySourcePriorityKey = "relay_source_priority"
 	relayPolicyKeyKey     = "relay_policy_key"
 
 	relaySourcePriorityLimit = 1_000_000
@@ -535,6 +537,7 @@ func (s *RelayStationService) SyncNativeRelayAccounts(ctx context.Context) error
 				account.Extra[relayStationIDKey] = station.ID
 				account.Extra[relayGroupIDKey] = binding.GroupID
 				account.Extra[relaySourceGroupKey] = source.SourceGroup
+				account.Extra[relaySourcePriorityKey] = source.Priority
 				account.Extra[relayPolicyKeyKey] = source.PolicyKey
 				if err := s.accountRepo.Update(ctx, &account); err != nil {
 					return err
@@ -554,7 +557,7 @@ func (s *RelayStationService) SyncNativeRelayAccounts(ctx context.Context) error
 				Platform:       platform,
 				Type:           accountType,
 				Credentials:    map[string]any{},
-				Extra:          map[string]any{relayAccountMarkerKey: true, relayAccountKeyKey: key, relayStationIDKey: station.ID, relayGroupIDKey: binding.GroupID, relaySourceGroupKey: source.SourceGroup, relayPolicyKeyKey: source.PolicyKey},
+				Extra:          map[string]any{relayAccountMarkerKey: true, relayAccountKeyKey: key, relayStationIDKey: station.ID, relayGroupIDKey: binding.GroupID, relaySourceGroupKey: source.SourceGroup, relaySourcePriorityKey: source.Priority, relayPolicyKeyKey: source.PolicyKey},
 				Concurrency:    3,
 				Priority:       relayNativePriority(source.Priority),
 				Status:         StatusActive,
@@ -605,17 +608,16 @@ func relaySourcePriorityForNative(nativePriority int) (int, error) {
 	return relayNativePriorityBase - nativePriority, nil
 }
 
-// UpdateRelayAccountNativePriority keeps the native Account control surface and
-// the relay source configuration in sync.
-func (s *RelayStationService) UpdateRelayAccountNativePriority(ctx context.Context, account *Account, nativePriority int) error {
+// UpdateRelayAccountSourcePriority lets the ordinary Accounts editor update
+// the Relay Stations priority without exposing the scheduler translation.
+func (s *RelayStationService) UpdateRelayAccountSourcePriority(ctx context.Context, account *Account, sourcePriority int) error {
 	if account == nil || !account.IsRelay() {
 		return infraerrors.BadRequest("RELAY_ACCOUNT_INVALID", "relay account is required")
 	}
-	sourcePriority, err := relaySourcePriorityForNative(nativePriority)
-	if err != nil {
-		return err
+	if err := validateNativeAccountPriority(sourcePriority); err != nil {
+		return infraerrors.BadRequest("RELAY_PRIORITY_INVALID", "relay account priority must be positive")
 	}
-	return s.UpdateRelayAccount(ctx, account.RelayStationID(), account.RelayGroupID(), account.RelaySourceGroup(), RelayAccountUpdateInput{Priority: &sourcePriority})
+	return s.UpdateRelayAccount(ctx, account.RelayStationID(), account.RelayGroupID(), account.RelaySourceGroup(), RelayAccountUpdateInput{Priority: &sourcePriority, PolicyKey: account.RelayPolicyKey()})
 }
 
 func (s *RelayStationService) syncNativeRelayState(ctx context.Context) error {
@@ -1011,7 +1013,7 @@ func (s *RelayStationService) UpdateRelayAccount(ctx context.Context, stationID 
 	sourceGroup = normalizeRelaySourceGroup(sourceGroup)
 	for index := range candidate.Bindings[bindingIndex].Sources {
 		source := &candidate.Bindings[bindingIndex].Sources[index]
-		if source.StationID != stationID || source.SourceGroup != sourceGroup {
+		if source.StationID != stationID || source.SourceGroup != sourceGroup || (input.PolicyKey != "" && source.PolicyKey != input.PolicyKey) {
 			continue
 		}
 		if input.Enabled != nil {
