@@ -972,7 +972,11 @@ func TestForwardDiscoversNewAPIGroupKey(t *testing.T) {
 		case "/api/user/login":
 			_, _ = w.Write([]byte(`{"success":true,"data":{"access_token":"dashboard"}}`))
 		case "/api/token/":
-			_, _ = w.Write([]byte(`{"success":true,"data":{"items":[{"id":7,"key":"masked****key","group":"vip","status":1}]}}`))
+			if r.Method == http.MethodPost {
+				_, _ = w.Write([]byte(`{"success":true}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"success":true,"data":{"items":[{"id":7,"key":"masked****key","name":"NewAPI - vip","group":"vip","status":1}]}}`))
 		case "/api/token/7/key":
 			_, _ = w.Write([]byte(`{"success":true,"data":{"key":"upstream-key"}}`))
 		case "/v1/chat/completions":
@@ -990,10 +994,10 @@ func TestForwardDiscoversNewAPIGroupKey(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	service := &RelayStationService{sessions: make(map[string]*relayStationSession)}
+	service := &RelayStationService{settingRepo: &fakeSettingRepo{}, sessions: make(map[string]*relayStationSession)}
 	station := relayStation{
 		ID: "newapi", Type: RelayStationTypeNewAPI, BaseURL: upstream.URL,
-		ControlURL: upstream.URL, Username: "admin", Password: "password",
+		ControlURL: upstream.URL, Username: "admin", Password: "password", APIKeyName: "NewAPI",
 	}
 	inbound, _ := http.NewRequest(http.MethodPost, "http://sub2api.test/v1/chat/completions?stream_options=include_usage", nil)
 	response, err := service.Forward(context.Background(), &RelayRoute{
@@ -1018,10 +1022,20 @@ func TestForwardDiscoversSub2APIGroupKey(t *testing.T) {
 		case "/api/v1/groups/available":
 			_, _ = w.Write([]byte(`{"code":0,"data":[{"id":9,"name":"vip"}]}`))
 		case "/api/v1/keys":
-			if r.URL.Query().Get("group_id") != "9" {
-				t.Errorf("sub2api group filter = %q", r.URL.Query().Get("group_id"))
+			if r.Method != http.MethodPost {
+				t.Errorf("sub2api key method = %s, want POST", r.Method)
 			}
-			_, _ = w.Write([]byte(`{"code":0,"data":{"items":[{"key":"sk-upstream-key","status":"active"}]}}`))
+			var payload struct {
+				Name    string `json:"name"`
+				GroupID int64  `json:"group_id"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode sub2api key request: %v", err)
+			}
+			if payload.GroupID != 9 || payload.Name != "Sub2API - vip" {
+				t.Errorf("sub2api key payload = %+v", payload)
+			}
+			_, _ = w.Write([]byte(`{"code":0,"data":{"key":"sk-upstream-key"}}`))
 		case "/v1/chat/completions":
 			forwarded = true
 			if got := r.Header.Get("Authorization"); got != "Bearer sk-upstream-key" {
@@ -1034,10 +1048,10 @@ func TestForwardDiscoversSub2APIGroupKey(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	service := &RelayStationService{sessions: make(map[string]*relayStationSession)}
+	service := &RelayStationService{settingRepo: &fakeSettingRepo{}, sessions: make(map[string]*relayStationSession)}
 	station := relayStation{
 		ID: "sub2api", Type: RelayStationTypeSub2API, BaseURL: upstream.URL,
-		ControlURL: upstream.URL, Username: "admin@example.com", Password: "password",
+		ControlURL: upstream.URL, Username: "admin@example.com", Password: "password", APIKeyName: "Sub2API",
 	}
 	inbound, _ := http.NewRequest(http.MethodPost, "http://sub2api.test/v1/chat/completions", nil)
 	response, err := service.Forward(context.Background(), &RelayRoute{

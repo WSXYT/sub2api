@@ -964,81 +964,192 @@ type relayNewAPIToken struct {
 
 func (s *RelayStationService) createNewAPIProxyToken(ctx context.Context, station relayStation, session *relayStationSession, sourceGroup, keyName string) (string, error) {
 	endpoint, err := relayEndpoint(station.ControlURL, "/api/token/")
-	if err != nil { return "", err }
-	if err := s.validateRelayURL(endpoint); err != nil { return "", err }
+	if err != nil {
+		return "", err
+	}
+	if err := s.validateRelayURL(endpoint); err != nil {
+		return "", err
+	}
 	body, _ := json.Marshal(map[string]any{"name": keyName, "group": sourceGroup, "unlimited_quota": true, "expired_time": -1})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil { return "", err }
+	if err != nil {
+		return "", err
+	}
 	req.Header.Set("Content-Type", "application/json")
 	setNewAPIAuth(req, session)
 	resp, err := session.client.Do(req)
-	if err != nil { return "", fmt.Errorf("create newapi token: %w", err) }
+	if err != nil {
+		return "", fmt.Errorf("create newapi token: %w", err)
+	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices { return "", &relayHTTPStatusError{status: resp.StatusCode} }
-	var created struct { Success *bool `json:"success"` }
-	if err := decodeRelayJSON(resp.Body, &created); err != nil { return "", err }
-	if created.Success != nil && !*created.Success { return "", errors.New("newapi token creation was rejected") }
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return "", &relayHTTPStatusError{status: resp.StatusCode}
+	}
+	var created struct {
+		Success *bool `json:"success"`
+	}
+	if err := decodeRelayJSON(resp.Body, &created); err != nil {
+		return "", err
+	}
+	if created.Success != nil && !*created.Success {
+		return "", errors.New("newapi token creation was rejected")
+	}
 
 	return s.findNewAPIProxyToken(ctx, station, session, sourceGroup, keyName)
 }
 
 func (s *RelayStationService) findNewAPIProxyToken(ctx context.Context, station relayStation, session *relayStationSession, sourceGroup, keyName string) (string, error) {
 	endpoint, err := relayEndpoint(station.ControlURL, "/api/token/")
-	if err != nil { return "", err }
+	if err != nil {
+		return "", err
+	}
 	parsed, _ := url.Parse(endpoint)
-	query := parsed.Query(); query.Set("p", "1"); query.Set("size", "100"); parsed.RawQuery = query.Encode()
+	query := parsed.Query()
+	query.Set("p", "1")
+	query.Set("size", "100")
+	parsed.RawQuery = query.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
-	if err != nil { return "", err }
+	if err != nil {
+		return "", err
+	}
 	setNewAPIAuth(req, session)
 	resp, err := session.client.Do(req)
-	if err != nil { return "", fmt.Errorf("list newapi tokens: %w", err) }
+	if err != nil {
+		return "", fmt.Errorf("list newapi tokens: %w", err)
+	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices { return "", &relayHTTPStatusError{status: resp.StatusCode} }
-	var payload struct { Success *bool `json:"success"`; Data json.RawMessage `json:"data"` }
-	if err := decodeRelayJSON(resp.Body, &payload); err != nil { return "", err }
-	var page struct { Items []relayNewAPIToken `json:"items"` }
-	_ = json.Unmarshal(payload.Data, &page); if len(page.Items) == 0 { _ = json.Unmarshal(payload.Data, &page.Items) }
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return "", &relayHTTPStatusError{status: resp.StatusCode}
+	}
+	var payload struct {
+		Success *bool           `json:"success"`
+		Data    json.RawMessage `json:"data"`
+	}
+	if err := decodeRelayJSON(resp.Body, &payload); err != nil {
+		return "", err
+	}
+	var page struct {
+		Items []relayNewAPIToken `json:"items"`
+	}
+	_ = json.Unmarshal(payload.Data, &page)
+	if len(page.Items) == 0 {
+		_ = json.Unmarshal(payload.Data, &page.Items)
+	}
 	for _, token := range page.Items {
-		group := strings.TrimSpace(token.Group); if group == "" { group = "default" }
-		if group != sourceGroup || token.Name != keyName || token.Status != 1 { continue }
+		group := strings.TrimSpace(token.Group)
+		if group == "" {
+			group = "default"
+		}
+		if group != sourceGroup || token.Name != keyName || token.Status != 1 {
+			continue
+		}
 		key := strings.TrimSpace(token.Key)
 		if key == "" || strings.Contains(key, "*") {
-			keyEndpoint, e := relayEndpoint(station.ControlURL, fmt.Sprintf("/api/token/%d/key", token.ID)); if e != nil { return "", e }
-			keyReq, e := http.NewRequestWithContext(ctx, http.MethodPost, keyEndpoint, nil); if e != nil { return "", e }
+			keyEndpoint, e := relayEndpoint(station.ControlURL, fmt.Sprintf("/api/token/%d/key", token.ID))
+			if e != nil {
+				return "", e
+			}
+			keyReq, e := http.NewRequestWithContext(ctx, http.MethodPost, keyEndpoint, nil)
+			if e != nil {
+				return "", e
+			}
 			setNewAPIAuth(keyReq, session)
-			keyResp, e := session.client.Do(keyReq); if e != nil { return "", fmt.Errorf("get newapi token key: %w", e) }
-			var keyPayload struct { Data struct { Key string `json:"key"` } `json:"data"` }
-			decodeErr := decodeRelayJSON(keyResp.Body, &keyPayload); _ = keyResp.Body.Close()
-			if keyResp.StatusCode < http.StatusOK || keyResp.StatusCode >= http.StatusMultipleChoices { return "", &relayHTTPStatusError{status: keyResp.StatusCode} }
-			if decodeErr != nil { return "", decodeErr }; key = keyPayload.Data.Key
+			keyResp, e := session.client.Do(keyReq)
+			if e != nil {
+				return "", fmt.Errorf("get newapi token key: %w", e)
+			}
+			var keyPayload struct {
+				Data struct {
+					Key string `json:"key"`
+				} `json:"data"`
+			}
+			decodeErr := decodeRelayJSON(keyResp.Body, &keyPayload)
+			_ = keyResp.Body.Close()
+			if keyResp.StatusCode < http.StatusOK || keyResp.StatusCode >= http.StatusMultipleChoices {
+				return "", &relayHTTPStatusError{status: keyResp.StatusCode}
+			}
+			if decodeErr != nil {
+				return "", decodeErr
+			}
+			key = keyPayload.Data.Key
 		}
-		if key != "" { return "sk-" + strings.TrimPrefix(key, "sk-"), nil }
+		if key != "" {
+			return "sk-" + strings.TrimPrefix(key, "sk-"), nil
+		}
 	}
 	return "", errors.New("newapi created token was not returned")
 }
 
 func (s *RelayStationService) createSub2APIProxyToken(ctx context.Context, station relayStation, token, sourceGroup, keyName string) (string, error) {
 	groupsEndpoint, err := relayEndpoint(station.ControlURL, "/api/v1/groups/available")
-	if err != nil { return "", err }
-	groupsReq, err := http.NewRequestWithContext(ctx, http.MethodGet, groupsEndpoint, nil); if err != nil { return "", err }
+	if err != nil {
+		return "", err
+	}
+	groupsReq, err := http.NewRequestWithContext(ctx, http.MethodGet, groupsEndpoint, nil)
+	if err != nil {
+		return "", err
+	}
 	groupsReq.Header.Set("Authorization", "Bearer "+token)
-	groupsResp, err := newRelayProxyClient().Do(groupsReq); if err != nil { return "", fmt.Errorf("list sub2api groups: %w", err) }
-	var groupsPayload struct { Code int `json:"code"`; Data []struct { ID int64 `json:"id"`; Name string `json:"name"` } `json:"data"` }
-	decodeErr := decodeRelayJSON(groupsResp.Body, &groupsPayload); _ = groupsResp.Body.Close()
-	if groupsResp.StatusCode < http.StatusOK || groupsResp.StatusCode >= http.StatusMultipleChoices { return "", &relayHTTPStatusError{status: groupsResp.StatusCode} }
-	if decodeErr != nil { return "", decodeErr }
-	var groupID int64; for _, group := range groupsPayload.Data { if strings.TrimSpace(group.Name) == sourceGroup { groupID = group.ID; break } }
-	if groupID == 0 { return "", errors.New("sub2api source group was not found") }
-	endpoint, err := relayEndpoint(station.ControlURL, "/api/v1/keys"); if err != nil { return "", err }
+	groupsResp, err := newRelayProxyClient().Do(groupsReq)
+	if err != nil {
+		return "", fmt.Errorf("list sub2api groups: %w", err)
+	}
+	var groupsPayload struct {
+		Code int `json:"code"`
+		Data []struct {
+			ID   int64  `json:"id"`
+			Name string `json:"name"`
+		} `json:"data"`
+	}
+	decodeErr := decodeRelayJSON(groupsResp.Body, &groupsPayload)
+	_ = groupsResp.Body.Close()
+	if groupsResp.StatusCode < http.StatusOK || groupsResp.StatusCode >= http.StatusMultipleChoices {
+		return "", &relayHTTPStatusError{status: groupsResp.StatusCode}
+	}
+	if decodeErr != nil {
+		return "", decodeErr
+	}
+	var groupID int64
+	for _, group := range groupsPayload.Data {
+		if strings.TrimSpace(group.Name) == sourceGroup {
+			groupID = group.ID
+			break
+		}
+	}
+	if groupID == 0 {
+		return "", errors.New("sub2api source group was not found")
+	}
+	endpoint, err := relayEndpoint(station.ControlURL, "/api/v1/keys")
+	if err != nil {
+		return "", err
+	}
 	body, _ := json.Marshal(map[string]any{"name": keyName, "group_id": groupID})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body)); if err != nil { return "", err }
-	req.Header.Set("Content-Type", "application/json"); req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := newRelayProxyClient().Do(req); if err != nil { return "", fmt.Errorf("create sub2api API key: %w", err) }
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := newRelayProxyClient().Do(req)
+	if err != nil {
+		return "", fmt.Errorf("create sub2api API key: %w", err)
+	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices { return "", &relayHTTPStatusError{status: resp.StatusCode} }
-	var payload struct { Code int `json:"code"`; Data struct { Key string `json:"key"` } `json:"data"` }
-	if err := decodeRelayJSON(resp.Body, &payload); err != nil { return "", err }
-	if payload.Code != 0 || strings.TrimSpace(payload.Data.Key) == "" { return "", errors.New("sub2api API key creation was rejected") }
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return "", &relayHTTPStatusError{status: resp.StatusCode}
+	}
+	var payload struct {
+		Code int `json:"code"`
+		Data struct {
+			Key string `json:"key"`
+		} `json:"data"`
+	}
+	if err := decodeRelayJSON(resp.Body, &payload); err != nil {
+		return "", err
+	}
+	if payload.Code != 0 || strings.TrimSpace(payload.Data.Key) == "" {
+		return "", errors.New("sub2api API key creation was rejected")
+	}
 	return strings.TrimSpace(payload.Data.Key), nil
 }
 

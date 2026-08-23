@@ -143,9 +143,9 @@ func (h *RelayStationHandler) Update(c *gin.Context) {
 		return
 	}
 	station, err := h.relayService.UpdateStation(c.Request.Context(), strings.TrimSpace(c.Param("id")), service.RelayStationUpdateInput{
-		Name:        request.Name,
-		APIKeyName:  request.APIKeyName,
-		BaseURL:     request.BaseURL,
+		Name:       request.Name,
+		APIKeyName: request.APIKeyName,
+		BaseURL:    request.BaseURL,
 		ControlURL: request.ControlURL,
 		UIPassword: request.UIPassword,
 		ProxyToken: request.ProxyToken,

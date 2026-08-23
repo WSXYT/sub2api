@@ -123,7 +123,7 @@ type RelayGroupBinding struct {
 type RelayStationCreateInput struct {
 	Type       RelayStationType
 	Name       string
-	APIKeyName  string
+	APIKeyName string
 	BaseURL    string
 	ControlURL string
 	UIPassword string
@@ -175,13 +175,13 @@ type relayAPIKey struct {
 }
 
 type relayStation struct {
-	ID         string           `json:"id"`
-	Type       RelayStationType `json:"type"`
-	Name       string            `json:"name"`
-	APIKeyName string            `json:"api_key_name,omitempty"`
+	ID         string                 `json:"id"`
+	Type       RelayStationType       `json:"type"`
+	Name       string                 `json:"name"`
+	APIKeyName string                 `json:"api_key_name,omitempty"`
 	APIKeys    map[string]relayAPIKey `json:"api_keys,omitempty"`
-	BaseURL    string            `json:"base_url"`
-	ControlURL string           `json:"control_url"`
+	BaseURL    string                 `json:"base_url"`
+	ControlURL string                 `json:"control_url"`
 
 	UIPassword string `json:"ui_password"`
 	ProxyToken string `json:"proxy_token"`
@@ -197,9 +197,9 @@ func (s relayStation) view() RelayStationView {
 	return RelayStationView{
 		ID:         s.ID,
 		Type:       s.Type,
-		Name:        s.Name,
-		APIKeyName:  s.APIKeyName,
-		BaseURL:     s.BaseURL,
+		Name:       s.Name,
+		APIKeyName: s.APIKeyName,
+		BaseURL:    s.BaseURL,
 		ControlURL: s.ControlURL,
 		Enabled:    s.Enabled,
 		Credentials: RelayCredentials{
@@ -778,9 +778,9 @@ func (s *RelayStationService) CreateStation(ctx context.Context, input RelayStat
 	station := relayStation{
 		ID:         uuid.NewString(),
 		Type:       input.Type,
-		Name:        strings.TrimSpace(input.Name),
-		APIKeyName:  strings.TrimSpace(input.APIKeyName),
-		BaseURL:     strings.TrimSpace(input.BaseURL),
+		Name:       strings.TrimSpace(input.Name),
+		APIKeyName: strings.TrimSpace(input.APIKeyName),
+		BaseURL:    strings.TrimSpace(input.BaseURL),
 		ControlURL: strings.TrimSpace(input.ControlURL),
 		UIPassword: strings.TrimSpace(input.UIPassword),
 		ProxyToken: strings.TrimSpace(input.ProxyToken),
