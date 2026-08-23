@@ -998,10 +998,13 @@ func TestForwardDiscoversNewAPIGroupKey(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	service := &RelayStationService{settingRepo: &relayCredentialSettingRepo{}, sessions: make(map[string]*relayStationSession)}
 	station := relayStation{
 		ID: "newapi", Type: RelayStationTypeNewAPI, BaseURL: upstream.URL,
 		ControlURL: upstream.URL, Username: "admin", Password: "password", APIKeyName: "NewAPI",
+	}
+	service := &RelayStationService{
+		settingRepo: &relayCredentialSettingRepo{}, sessions: make(map[string]*relayStationSession),
+		config: relayStationConfig{Stations: []relayStation{station}},
 	}
 	inbound, _ := http.NewRequest(http.MethodPost, "http://sub2api.test/v1/chat/completions?stream_options=include_usage", nil)
 	response, err := service.Forward(context.Background(), &RelayRoute{
@@ -1052,10 +1055,13 @@ func TestForwardDiscoversSub2APIGroupKey(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	service := &RelayStationService{settingRepo: &relayCredentialSettingRepo{}, sessions: make(map[string]*relayStationSession)}
 	station := relayStation{
 		ID: "sub2api", Type: RelayStationTypeSub2API, BaseURL: upstream.URL,
 		ControlURL: upstream.URL, Username: "admin@example.com", Password: "password", APIKeyName: "Sub2API",
+	}
+	service := &RelayStationService{
+		settingRepo: &relayCredentialSettingRepo{}, sessions: make(map[string]*relayStationSession),
+		config: relayStationConfig{Stations: []relayStation{station}},
 	}
 	inbound, _ := http.NewRequest(http.MethodPost, "http://sub2api.test/v1/chat/completions", nil)
 	response, err := service.Forward(context.Background(), &RelayRoute{
