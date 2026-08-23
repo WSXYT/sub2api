@@ -426,18 +426,16 @@ func NewRelayStationService(settingRepo SettingRepository, groupRepo GroupReposi
 	}
 }
 
-const (
-	relayAccountMarkerKey   = "relay_account"
-	relayAccountKeyKey      = "relay_account_key"
-	relayStationIDKey       = "relay_station_id"
-	relayGroupIDKey          = "relay_group_id"
-	relaySourceGroupKey     = "relay_source_group"
-	relaySourcePriorityKey  = "relay_source_priority"
-	relayPolicyKeyKey       = "relay_policy_key"
+const relayAccountMarkerKey = "relay_account"
+const relayAccountKeyKey = "relay_account_key"
+const relayStationIDKey = "relay_station_id"
+const relayGroupIDKey = "relay_group_id"
+const relaySourceGroupKey = "relay_source_group"
+const relaySourcePriorityKey = "relay_source_priority"
+const relayPolicyKeyKey = "relay_policy_key"
 
-	relaySourcePriorityLimit = 1_000_000
-	relayNativePriorityBase  = relaySourcePriorityLimit + 1
-)
+const relaySourcePriorityLimit = 1_000_000
+const relayNativePriorityBase = relaySourcePriorityLimit + 1
 
 func relayNativeAccountIdentity(group *Group) (platform, accountType string) {
 	if group == nil {
