@@ -165,12 +165,14 @@ func (a *Account) IsRelay() bool {
 // account-management surface. The scheduler may store a translated priority
 // on the native Account, so callers should prefer this value for display/editing.
 func (a *Account) RelaySourcePriority() (int, bool) {
-	if a == nil || !a.IsRelay() || a.Extra == nil {
+	if a == nil || !a.IsRelay() {
 		return 0, false
 	}
-	value, ok := a.Extra[relaySourcePriorityKey]
-	if ok {
-		return ParseExtraInt(value), true
+	if a.Extra != nil {
+		value, ok := a.Extra[relaySourcePriorityKey]
+		if ok {
+			return ParseExtraInt(value), true
+		}
 	}
 	// Legacy relay identities predate the display snapshot and only have the
 	// translated native priority persisted.
