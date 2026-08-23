@@ -965,6 +965,10 @@ func TestListStationsReadsSeparateAIHubBalances(t *testing.T) {
 	}
 }
 
+type relayCredentialSettingRepo struct{ fakeSettingRepo }
+
+func (*relayCredentialSettingRepo) Set(context.Context, string, string) error { return nil }
+
 func TestForwardDiscoversNewAPIGroupKey(t *testing.T) {
 	forwarded := false
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -994,7 +998,7 @@ func TestForwardDiscoversNewAPIGroupKey(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	service := &RelayStationService{settingRepo: &fakeSettingRepo{}, sessions: make(map[string]*relayStationSession)}
+	service := &RelayStationService{settingRepo: &relayCredentialSettingRepo{}, sessions: make(map[string]*relayStationSession)}
 	station := relayStation{
 		ID: "newapi", Type: RelayStationTypeNewAPI, BaseURL: upstream.URL,
 		ControlURL: upstream.URL, Username: "admin", Password: "password", APIKeyName: "NewAPI",
@@ -1048,7 +1052,7 @@ func TestForwardDiscoversSub2APIGroupKey(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	service := &RelayStationService{settingRepo: &fakeSettingRepo{}, sessions: make(map[string]*relayStationSession)}
+	service := &RelayStationService{settingRepo: &relayCredentialSettingRepo{}, sessions: make(map[string]*relayStationSession)}
 	station := relayStation{
 		ID: "sub2api", Type: RelayStationTypeSub2API, BaseURL: upstream.URL,
 		ControlURL: upstream.URL, Username: "admin@example.com", Password: "password", APIKeyName: "Sub2API",
