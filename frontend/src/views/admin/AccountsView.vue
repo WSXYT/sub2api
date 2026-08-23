@@ -1682,17 +1682,22 @@ function getOpenAICompactMeta(row: any): { label: string; className: string; dot
   }
 }
 
-function getRelaySupportedModels(row: Account): string | null {
+function isRelayAccount(row: Account): boolean {
   const extra = row.extra as Record<string, unknown> | undefined
-  if (extra?.relay_account !== true) return null
-  const models = extra.relay_supported_models
+  return row.type === 'relay' || extra?.relay_account === true
+}
+
+function getRelaySupportedModels(row: Account): string | null {
+  if (!isRelayAccount(row)) return null
+  const extra = row.extra as Record<string, unknown> | undefined
+  const models = extra?.relay_supported_models
   if (!Array.isArray(models)) return ''
   return models.filter((model): model is string => typeof model === 'string' && model.trim() !== '').join(', ')
 }
 
 function getRelaySuggestedRoute(row: Account): string | null {
   const extra = row.extra as Record<string, unknown> | undefined
-  if (extra?.relay_account !== true || typeof extra.relay_suggested_group_code !== 'string' || !extra.relay_suggested_group_code.trim()) return null
+  if (!isRelayAccount(row) || typeof extra?.relay_suggested_group_code !== 'string' || !extra.relay_suggested_group_code.trim()) return null
   const rate = Number(extra.relay_suggested_rate)
   return Number.isFinite(rate)
     ? `${extra.relay_suggested_group_code.trim()} (${formatSchedulerScore(rate)})`

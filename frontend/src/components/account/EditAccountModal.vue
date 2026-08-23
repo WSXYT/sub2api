@@ -3144,7 +3144,9 @@ const customErrorCodeInput = ref<number | null>(null)
 const headerOverrideEnabled = ref(false)
 const headerOverrideRows = ref<HeaderOverrideRow[]>([])
 
-const isRelayAccount = computed(() => props.account?.extra?.relay_account === true)
+const isRelayAccount = computed(() =>
+  props.account?.type === 'relay' || props.account?.extra?.relay_account === true
+)
 
 const headerOverrideCapable = computed(
   () => !!props.account && (isRelayAccount.value || isHeaderOverrideCapable(props.account.platform, props.account.type))
@@ -3457,7 +3459,7 @@ const normalizeOpenAIResponsesMode = (mode: unknown): OpenAIResponsesMode => {
   return 'auto'
 }
 const isOpenAIModelRestrictionDisabled = computed(() =>
-  props.account?.platform === 'openai' && openaiPassthroughEnabled.value
+  !isRelayAccount.value && props.account?.platform === 'openai' && openaiPassthroughEnabled.value
 )
 const openAIResponsesStatusKey = computed(() => {
   if (openAIResponsesMode.value === 'force_responses') {

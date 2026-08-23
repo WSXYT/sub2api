@@ -148,7 +148,13 @@ func (a *Account) IsActive() bool {
 
 // IsRelay reports whether this native account identity is backed by a relay binding.
 func (a *Account) IsRelay() bool {
-	if a == nil || a.Extra == nil {
+	if a == nil {
+		return false
+	}
+	if a.Type == AccountTypeRelay {
+		return true
+	}
+	if a.Extra == nil {
 		return false
 	}
 	value, ok := a.Extra[relayAccountMarkerKey].(bool)
