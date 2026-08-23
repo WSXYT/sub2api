@@ -976,7 +976,7 @@ func TestForwardDiscoversNewAPIGroupKey(t *testing.T) {
 				_, _ = w.Write([]byte(`{"success":true}`))
 				return
 			}
-			_, _ = w.Write([]byte(`{"success":true,"data":{"items":[{"id":7,"key":"masked****key","name":"NewAPI - vip","group":"vip","status":1}]}}`))
+			_, _ = w.Write([]byte(`{"success":true,"data":{"items":[{"id":7,"key":"masked****key","name":"NewAPI","group":"vip","status":1}]}}`))
 		case "/api/token/7/key":
 			_, _ = w.Write([]byte(`{"success":true,"data":{"key":"upstream-key"}}`))
 		case "/v1/chat/completions":
@@ -1032,7 +1032,7 @@ func TestForwardDiscoversSub2APIGroupKey(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 				t.Fatalf("decode sub2api key request: %v", err)
 			}
-			if payload.GroupID != 9 || payload.Name != "Sub2API - vip" {
+			if payload.GroupID != 9 || payload.Name != "Sub2API" {
 				t.Errorf("sub2api key payload = %+v", payload)
 			}
 			_, _ = w.Write([]byte(`{"code":0,"data":{"key":"sk-upstream-key"}}`))
