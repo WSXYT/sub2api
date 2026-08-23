@@ -19,6 +19,7 @@ export interface RelayStation {
 	id: string;
 	type: RelayStationType;
 	name: string;
+	api_key_name?: string;
 	base_url: string;
 	control_url: string;
 	enabled: boolean;
@@ -31,6 +32,7 @@ export interface RelayStation {
 export interface RelayStationCreateInput {
 	type: RelayStationType;
 	name: string;
+	api_key_name?: string;
 	base_url?: string;
 	control_url?: string;
 	ui_password?: string;
@@ -42,6 +44,7 @@ export interface RelayStationCreateInput {
 
 export interface RelayStationUpdateInput {
 	name?: string;
+	api_key_name?: string;
 	base_url?: string;
 	control_url?: string;
 	ui_password?: string;
@@ -54,6 +57,7 @@ export interface RelayStationUpdateInput {
 export interface RelayStationSource {
 	station_id: string;
 	enabled: boolean;
+	api_key_name?: string;
 	source_group: string;
 	priority: number;
 	delta: number;

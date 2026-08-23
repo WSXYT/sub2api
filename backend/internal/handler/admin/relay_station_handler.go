@@ -26,6 +26,7 @@ func NewRelayStationHandler(relayService *service.RelayStationService) *RelaySta
 type createRelayStationRequest struct {
 	Type       service.RelayStationType `json:"type" binding:"required,oneof=aihub newapi sub2api"`
 	Name       string                   `json:"name" binding:"required,max=100"`
+	APIKeyName string                   `json:"api_key_name" binding:"omitempty,max=100"`
 	BaseURL    string                   `json:"base_url" binding:"omitempty,max=2048"`
 	ControlURL string                   `json:"control_url" binding:"omitempty,max=2048"`
 	UIPassword string                   `json:"ui_password" binding:"omitempty,max=2048"`
@@ -37,6 +38,7 @@ type createRelayStationRequest struct {
 
 type updateRelayStationRequest struct {
 	Name       *string `json:"name" binding:"omitempty,max=100"`
+	APIKeyName *string `json:"api_key_name" binding:"omitempty,max=100"`
 	BaseURL    *string `json:"base_url" binding:"omitempty,max=2048"`
 	ControlURL *string `json:"control_url" binding:"omitempty,max=2048"`
 	UIPassword *string `json:"ui_password" binding:"omitempty,max=2048"`
@@ -114,6 +116,7 @@ func (h *RelayStationHandler) Create(c *gin.Context) {
 	station, err := h.relayService.CreateStation(c.Request.Context(), service.RelayStationCreateInput{
 		Type:       request.Type,
 		Name:       request.Name,
+		APIKeyName: request.APIKeyName,
 		BaseURL:    request.BaseURL,
 		ControlURL: request.ControlURL,
 		UIPassword: request.UIPassword,
@@ -140,8 +143,9 @@ func (h *RelayStationHandler) Update(c *gin.Context) {
 		return
 	}
 	station, err := h.relayService.UpdateStation(c.Request.Context(), strings.TrimSpace(c.Param("id")), service.RelayStationUpdateInput{
-		Name:       request.Name,
-		BaseURL:    request.BaseURL,
+		Name:        request.Name,
+		APIKeyName:  request.APIKeyName,
+		BaseURL:     request.BaseURL,
 		ControlURL: request.ControlURL,
 		UIPassword: request.UIPassword,
 		ProxyToken: request.ProxyToken,

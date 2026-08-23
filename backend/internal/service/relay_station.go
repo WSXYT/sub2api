@@ -100,6 +100,7 @@ type RelayPriceBand struct {
 type RelayStationSource struct {
 	StationID    string          `json:"station_id"`
 	Enabled      bool            `json:"enabled"`
+	APIKeyName   string          `json:"api_key_name,omitempty"`
 	SourceGroup  string          `json:"source_group,omitempty"`
 	PolicyKey    string          `json:"policy_key,omitempty"`
 	Priority     int             `json:"priority"`
@@ -122,6 +123,7 @@ type RelayGroupBinding struct {
 type RelayStationCreateInput struct {
 	Type       RelayStationType
 	Name       string
+	APIKeyName  string
 	BaseURL    string
 	ControlURL string
 	UIPassword string
@@ -134,6 +136,7 @@ type RelayStationCreateInput struct {
 // RelayStationUpdateInput uses pointers so an omitted secret remains unchanged.
 type RelayStationUpdateInput struct {
 	Name       *string
+	APIKeyName *string
 	BaseURL    *string
 	ControlURL *string
 	UIPassword *string
@@ -148,6 +151,7 @@ type RelayStationView struct {
 	ID          string           `json:"id"`
 	Type        RelayStationType `json:"type"`
 	Name        string           `json:"name"`
+	APIKeyName  string           `json:"api_key_name,omitempty"`
 	BaseURL     string           `json:"base_url"`
 	ControlURL  string           `json:"control_url"`
 	Enabled     bool             `json:"enabled"`
@@ -165,11 +169,18 @@ type RelayCredentials struct {
 	Password   bool `json:"password"`
 }
 
+type relayAPIKey struct {
+	Name string `json:"name"`
+	Key  string `json:"key"`
+}
+
 type relayStation struct {
 	ID         string           `json:"id"`
 	Type       RelayStationType `json:"type"`
-	Name       string           `json:"name"`
-	BaseURL    string           `json:"base_url"`
+	Name       string            `json:"name"`
+	APIKeyName string            `json:"api_key_name,omitempty"`
+	APIKeys    map[string]relayAPIKey `json:"api_keys,omitempty"`
+	BaseURL    string            `json:"base_url"`
 	ControlURL string           `json:"control_url"`
 
 	UIPassword string `json:"ui_password"`
@@ -186,8 +197,9 @@ func (s relayStation) view() RelayStationView {
 	return RelayStationView{
 		ID:         s.ID,
 		Type:       s.Type,
-		Name:       s.Name,
-		BaseURL:    s.BaseURL,
+		Name:        s.Name,
+		APIKeyName:  s.APIKeyName,
+		BaseURL:     s.BaseURL,
 		ControlURL: s.ControlURL,
 		Enabled:    s.Enabled,
 		Credentials: RelayCredentials{
@@ -744,10 +756,10 @@ func (s *RelayStationService) GetStation(ctx context.Context, id string) (*Relay
 
 func (s *RelayStationService) stationView(ctx context.Context, station relayStation) RelayStationView {
 	view := station.view()
-	if station.Type != RelayStationTypeAIHub || station.Username == "" || station.Password == "" {
+	if station.Username == "" || station.Password == "" {
 		return view
 	}
-	if balance, err := s.fetchAIHubBalance(ctx, station); err == nil {
+	if balance, err := s.fetchStationBalance(ctx, station); err == nil {
 		view.Balance = balance
 	}
 	return view
@@ -766,8 +778,9 @@ func (s *RelayStationService) CreateStation(ctx context.Context, input RelayStat
 	station := relayStation{
 		ID:         uuid.NewString(),
 		Type:       input.Type,
-		Name:       strings.TrimSpace(input.Name),
-		BaseURL:    strings.TrimSpace(input.BaseURL),
+		Name:        strings.TrimSpace(input.Name),
+		APIKeyName:  strings.TrimSpace(input.APIKeyName),
+		BaseURL:     strings.TrimSpace(input.BaseURL),
 		ControlURL: strings.TrimSpace(input.ControlURL),
 		UIPassword: strings.TrimSpace(input.UIPassword),
 		ProxyToken: strings.TrimSpace(input.ProxyToken),
@@ -838,6 +851,16 @@ func (s *RelayStationService) UpdateStation(ctx context.Context, id string, inpu
 	if input.Name != nil {
 		station.Name = strings.TrimSpace(*input.Name)
 	}
+	if input.APIKeyName != nil && station.Type != RelayStationTypeAIHub {
+		name := strings.TrimSpace(*input.APIKeyName)
+		if name == "" {
+			name = station.Name + " relay"
+		}
+		if name != station.APIKeyName {
+			station.APIKeyName = name
+			station.APIKeys = nil
+		}
+	}
 	if input.BaseURL != nil {
 		station.BaseURL = strings.TrimSpace(*input.BaseURL)
 	}
@@ -884,6 +907,25 @@ func (s *RelayStationService) UpdateStation(ctx context.Context, id string, inpu
 		return nil, err
 	}
 	return &view, nil
+}
+
+func (s *RelayStationService) persistRelayAPIKey(ctx context.Context, stationID, sourceGroup string, key relayAPIKey) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	candidate := cloneRelayConfig(s.config)
+	index := relayStationIndex(candidate.Stations, stationID)
+	if index < 0 {
+		return ErrRelayStationNotFound
+	}
+	if candidate.Stations[index].APIKeys == nil {
+		candidate.Stations[index].APIKeys = make(map[string]relayAPIKey)
+	}
+	candidate.Stations[index].APIKeys[sourceGroup] = key
+	if err := s.persistConfigLocked(ctx, candidate); err != nil {
+		return err
+	}
+	s.config = candidate
+	return nil
 }
 
 func (s *RelayStationService) DeleteStation(ctx context.Context, id string) error {
@@ -963,8 +1005,8 @@ func (s *RelayStationService) ListRelayAccounts(ctx context.Context) ([]RelayAcc
 			} else if rateReady(rate) {
 				account.RateStatus = RelayRateStatusUnavailable
 			}
-			if station.Type == RelayStationTypeAIHub {
-				if balance, err := s.fetchAIHubBalance(ctx, station); err == nil {
+			if station.Username != "" && station.Password != "" {
+				if balance, err := s.fetchStationBalance(ctx, station); err == nil {
 					account.Balance = balance
 				}
 			}
@@ -1772,6 +1814,7 @@ func (s *RelayStationService) validateConfig(candidate *relayStationConfig) erro
 		for sourceIndex := range binding.Sources {
 			source := &binding.Sources[sourceIndex]
 			source.StationID = strings.TrimSpace(source.StationID)
+			source.APIKeyName = strings.TrimSpace(source.APIKeyName)
 			source.Mode = strings.TrimSpace(source.Mode)
 			var poolErr error
 			source.AccountPools, poolErr = normalizeRelayAccountPools(source.AccountPools)
@@ -1793,6 +1836,9 @@ func (s *RelayStationService) validateConfig(candidate *relayStationConfig) erro
 			}
 			if !validRelaySourceGroup(source.SourceGroup) {
 				return infraerrors.BadRequest("RELAY_SOURCE_GROUP_INVALID", "relay source_group is invalid")
+			}
+			if len(source.APIKeyName) > 100 || strings.ContainsAny(source.APIKeyName, "\r\n\x00") {
+				return infraerrors.BadRequest("RELAY_API_KEY_NAME_INVALID", "relay api_key_name is invalid")
 			}
 			if source.Priority < -relaySourcePriorityLimit || source.Priority > relaySourcePriorityLimit {
 				return infraerrors.BadRequest("RELAY_PRIORITY_INVALID", "relay source priority must be between -1000000 and 1000000")
@@ -1842,6 +1888,7 @@ func (s *RelayStationService) validateStation(station *relayStation) error {
 	}
 	station.ID = strings.TrimSpace(station.ID)
 	station.Name = strings.TrimSpace(station.Name)
+	station.APIKeyName = strings.TrimSpace(station.APIKeyName)
 	station.BaseURL = strings.TrimSpace(station.BaseURL)
 	station.ControlURL = strings.TrimSpace(station.ControlURL)
 	if station.Type == RelayStationTypeAIHub && station.BaseURL == "" {
@@ -1853,6 +1900,9 @@ func (s *RelayStationService) validateStation(station *relayStation) error {
 	station.Password = strings.TrimSpace(station.Password)
 	if station.ID == "" || station.Name == "" || len(station.Name) > 100 {
 		return infraerrors.BadRequest("RELAY_STATION_INVALID", "relay station id and name are required")
+	}
+	if len(station.APIKeyName) > 100 || strings.ContainsAny(station.APIKeyName, "\r\n\x00") {
+		return infraerrors.BadRequest("RELAY_API_KEY_NAME_INVALID", "relay api_key_name is invalid")
 	}
 	if station.ControlURL == "" {
 		station.ControlURL = station.BaseURL
@@ -2102,6 +2152,14 @@ func cloneRelayConfig(source relayStationConfig) relayStationConfig {
 	result := relayStationConfig{
 		Stations: append([]relayStation(nil), source.Stations...),
 		Bindings: cloneRelayBindings(source.Bindings),
+	}
+	for i := range result.Stations {
+		if source.Stations[i].APIKeys != nil {
+			result.Stations[i].APIKeys = make(map[string]relayAPIKey, len(source.Stations[i].APIKeys))
+			for group, key := range source.Stations[i].APIKeys {
+				result.Stations[i].APIKeys[group] = key
+			}
+		}
 	}
 	if result.Stations == nil {
 		result.Stations = []relayStation{}

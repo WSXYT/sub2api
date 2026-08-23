@@ -611,7 +611,7 @@ export default {
       refreshRates: 'Refresh Prices',
       saveBindings: 'Save Bindings',
       columns: {
-        name: 'Name', type: 'Type', address: 'Address', balance: 'Balance', status: 'Status', actions: 'Actions',
+        apiKeyName: 'Upstream Key Name', name: 'Name', type: 'Type', address: 'Address', balance: 'Balance', status: 'Status', actions: 'Actions',
         station: 'Relay Station', priority: 'Priority', adjustment: 'Price Adjustment', accountPools: 'AIHub Plans', mode: 'Routing Mode',
         priceBand: 'Rate Range', enabled: 'Enabled', rate: 'Collected Rate', effectiveRate: 'Effective Rate', updatedAt: 'Collected At', group: 'Group',
         requests: 'Requests', totalCost: 'Base Cost', downstreamRate: 'Downstream Rate', upstreamRate: 'Upstream Rate', revenue: 'Est. Revenue', cost: 'Est. Cost', profit: 'Est. Profit', actualCost: 'Recorded Upstream Cost', actualProfit: 'Recorded Profit'
@@ -619,7 +619,7 @@ export default {
       types: { aihub: 'aihub-auto', newapi: 'New API', sub2api: 'Official Sub2API' },
       status: { enabled: 'Enabled', disabled: 'Disabled', configured: 'Configured', active: 'Active', inactive: 'Inactive', ready: 'Ready', unauthenticated: 'Authentication Failed', unavailable: 'Unavailable', stale: 'Stale', unknown: 'No Data' },
       form: {
-        createTitle: 'Add Relay Station', editTitle: 'Edit Relay Station', name: 'Name', namePlaceholder: 'Enter relay station name', type: 'Type',
+        createTitle: 'Add Relay Station', editTitle: 'Edit Relay Station', name: 'Name', namePlaceholder: 'Enter relay station name', apiKeyName: 'Default Upstream Key Name', apiKeyNamePlaceholder: 'Used when a group has no custom name', type: 'Type',
         baseUrl: 'API URL', baseUrlPlaceholder: 'https://relay.example.com', controlUrl: 'Console URL', controlUrlPlaceholder: 'Uses the API URL when empty',
         uiPassword: 'Console Password', proxyToken: 'API Token', username: 'Account', usernamePlaceholder: 'Enter platform account', password: 'Account Password',
         passwordPlaceholder: 'Enter platform password', aihubEmail: 'AIHub Email', aihubEmailPlaceholder: 'Enter AIHub platform login email', enabled: 'Enable Relay Station', leaveBlank: 'Leave blank to keep the current setting'

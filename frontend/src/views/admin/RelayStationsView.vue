@@ -305,6 +305,20 @@
               </div>
             </template>
 
+            <template #cell-api_key_name="{ row }">
+              <input
+                v-if="stationById(row.station_id)?.type !== 'aihub'"
+                :value="row.api_key_name || ''"
+                type="text"
+                maxlength="100"
+                class="input w-40"
+                :placeholder="stationById(row.station_id)?.api_key_name || stationById(row.station_id)?.name"
+                :aria-label="bindingControlLabel('apiKeyName', row)"
+                @input="updateSourceAPIKeyName(row, $event)"
+              />
+              <span v-else class="text-gray-400">-</span>
+            </template>
+
             <template #cell-priority="{ row }">
               <input
                 :value="row.priority"
@@ -572,6 +586,19 @@
               :placeholder="t('admin.relayStations.form.namePlaceholder')"
             />
           </div>
+          <div v-if="stationForm.type !== 'aihub'">
+            <label for="relay-station-api-key-name" class="input-label">
+              {{ t('admin.relayStations.form.apiKeyName') }}
+            </label>
+            <input
+              id="relay-station-api-key-name"
+              v-model="stationForm.api_key_name"
+              type="text"
+              maxlength="100"
+              class="input"
+              :placeholder="t('admin.relayStations.form.apiKeyNamePlaceholder')"
+            />
+          </div>
           <div>
             <label class="input-label">
               {{ t('admin.relayStations.form.type') }} <span class="text-red-500">*</span>
@@ -797,6 +824,7 @@ type CredentialField = keyof RelayStationCredentials
 interface StationForm {
   type: RelayStationType
   name: string
+  api_key_name: string
   base_url: string
   control_url: string
   ui_password: string
@@ -845,6 +873,7 @@ const profitUnavailable = ref(false)
 const stationForm = reactive<StationForm>({
   type: 'aihub',
   name: '',
+  api_key_name: '',
   base_url: '',
   control_url: '',
   ui_password: '',
@@ -879,6 +908,7 @@ const modeOptions = computed(() =>
 
 const bindingColumns = computed<Column[]>(() => [
   { key: 'station', label: t('admin.relayStations.columns.station') },
+  { key: 'api_key_name', label: t('admin.relayStations.columns.apiKeyName') },
   { key: 'priority', label: t('admin.relayStations.columns.priority') },
   { key: 'adjustment', label: t('admin.relayStations.columns.adjustment') },
   { key: 'group', label: t('admin.relayStations.columns.group') },
@@ -1022,7 +1052,7 @@ function rateStatusLabel(status?: RelayRateStatus): string {
 }
 
 function bindingControlLabel(
-  key: 'group' | 'priceBand' | 'accountPools' | 'mode' | 'priority' | 'adjustment' | 'enabled',
+  key: 'group' | 'priceBand' | 'accountPools' | 'mode' | 'priority' | 'adjustment' | 'enabled' | 'apiKeyName',
   source: RelayStationSource
 ): string {
   return `${t(`admin.relayStations.columns.${key}`)}: ${stationById(source.station_id)?.name || source.station_id}`
@@ -1151,6 +1181,11 @@ watch(stationToAdd, () => {
   sourceGroupToAdd.value = typeof first === 'string' ? first : null
 })
 
+function updateSourceAPIKeyName(source: RelayStationSource, event: Event): void {
+  source.api_key_name = (event.target as HTMLInputElement).value
+  bindingsDirty.value = true
+}
+
 function updateSourceGroup(source: RelayStationSource, value: string | number | boolean | null): void {
   source.source_group = typeof value === 'string' ? value : ''
   bindingsDirty.value = true
@@ -1224,6 +1259,7 @@ function resetStationForm(): void {
   Object.assign(stationForm, {
     type: 'aihub',
     name: '',
+    api_key_name: '',
     base_url: '',
     control_url: '',
     ui_password: '',
@@ -1245,6 +1281,7 @@ function openEditStation(station: RelayStation): void {
   Object.assign(stationForm, {
     type: station.type,
     name: station.name,
+    api_key_name: station.api_key_name || '',
     base_url: station.base_url,
     control_url: station.control_url,
     ui_password: '',
@@ -1272,6 +1309,7 @@ async function saveStation(): Promise<void> {
     if (editingStation.value) {
       const payload: RelayStationUpdateInput = {
         name: stationForm.name.trim(),
+        api_key_name: stationForm.api_key_name.trim(),
         username: stationForm.username,
         password: stationForm.password,
         enabled: stationForm.enabled
@@ -1288,6 +1326,7 @@ async function saveStation(): Promise<void> {
       const payload: RelayStationCreateInput = {
         type: stationForm.type,
         name: stationForm.name.trim(),
+        api_key_name: stationForm.api_key_name.trim(),
         username: stationForm.username.trim(),
         password: stationForm.password.trim(),
         enabled: true
