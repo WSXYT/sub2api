@@ -18,18 +18,21 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/usagestats"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 )
 
 const (
 	SettingKeyRelayStationConfig    = "relay_station_config"
 	SettingKeyRelayStationRateCache = "relay_station_rate_cache"
 
-	relayStationRatePollInterval = time.Minute
-	relayStationRouteTTL         = 5 * time.Minute
-	relayMaxRateHeader           = "X-Sub2API-Max-Rate"
-	relayAIHubAccountHeader      = "X-AIHub-Account-ID"
+	relayStationRatePollInterval      = time.Minute
+	relayStationBackgroundPollTimeout = 30 * time.Second
+	relayStationRouteTTL              = 5 * time.Minute
+	relayMaxRateHeader                = "X-Sub2API-Max-Rate"
+	relayAIHubAccountHeader           = "X-AIHub-Account-ID"
 )
 
 var (
@@ -403,14 +406,18 @@ type RelayStationService struct {
 	usage       *UsageService
 	cfg         *config.Config
 
-	loadMu       sync.Mutex
-	nativeSyncMu sync.Mutex
-	mu           sync.RWMutex
-	loaded       bool
+	loadMu        sync.Mutex
+	nativeSyncMu  sync.Mutex
+	ratePublishMu sync.Mutex
+	mu            sync.RWMutex
+	loaded        bool
 
-	// Each AIHub station owns a distinct aihub-auto instance. The mutex only
-	// serializes its initial login; proxy requests stay fully concurrent.
+	// Initial login is serialized per managed runtime; distinct accounts and
+	// policies remain independent, and waiters honor request cancellation.
 	aihubMu             sync.Mutex
+	aihubLocks          map[string]*contextMutex
+	aihubEpoch          uint64
+	aihubRuntimeEpoch   map[string]uint64
 	activeAIHubStations map[string]struct{}
 
 	config relayStationConfig
@@ -433,6 +440,8 @@ func NewRelayStationService(settingRepo SettingRepository, groupRepo GroupReposi
 		cfg:                 cfg,
 		routes:              make(map[string]relayRouteCacheEntry),
 		sessions:            make(map[string]*relayStationSession),
+		aihubLocks:          make(map[string]*contextMutex),
+		aihubRuntimeEpoch:   make(map[string]uint64),
 		activeAIHubStations: make(map[string]struct{}),
 		stopSignal:          make(chan struct{}),
 	}
@@ -592,7 +601,9 @@ func (s *RelayStationService) SyncNativeRelayAccounts(ctx context.Context) error
 			}
 		}
 	}
-	return s.syncNativeRelayRates(ctx, s.snapshotConfig(), s.snapshotRates())
+	s.ratePublishMu.Lock()
+	defer s.ratePublishMu.Unlock()
+	return s.syncNativeRelayRatesLocked(ctx, s.snapshotConfig(), s.snapshotRates())
 }
 
 func relayAccountKey(stationID string, groupID int64, sourceGroup string) string {
@@ -655,9 +666,13 @@ func (s *RelayStationService) Start() {
 }
 
 func (s *RelayStationService) refreshInBackground() {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	rateCtx, rateCancel := context.WithTimeout(context.Background(), 2*relayStationBackgroundPollTimeout)
+	if err := s.refreshRatesWithStationTimeout(rateCtx, "", relayStationBackgroundPollTimeout); err != nil {
+		logger.L().Warn("relay station background rate refresh failed", zap.String("error_type", fmt.Sprintf("%T", err)))
+	}
+	rateCancel()
+	ctx, cancel := context.WithTimeout(context.Background(), relayStationBackgroundPollTimeout)
 	defer cancel()
-	_ = s.RefreshRates(ctx)
 	_ = s.SyncAIHubConfig(ctx)
 }
 
@@ -848,6 +863,7 @@ func (s *RelayStationService) UpdateStation(ctx context.Context, id string, inpu
 		return nil, ErrRelayStationNotFound
 	}
 	station := &candidate.Stations[index]
+	previousStation := *station
 	if input.Name != nil {
 		station.Name = strings.TrimSpace(*input.Name)
 	}
@@ -890,11 +906,24 @@ func (s *RelayStationService) UpdateStation(ctx context.Context, id string, inpu
 		s.mu.Unlock()
 		return nil, err
 	}
-	if err := s.persistConfigLocked(ctx, candidate); err != nil {
+	pollingIdentityChanged := relayStationPollingIdentityChanged(previousStation, *station)
+	candidateRates := s.rates
+	if pollingIdentityChanged {
+		candidateRates = cloneRelayRates(s.rates)
+		delete(candidateRates.Rates, id)
+		candidateRates.UpdatedAt = time.Now().UTC()
+		if err := s.persistAllLocked(ctx, candidate, candidateRates); err != nil {
+			s.mu.Unlock()
+			return nil, err
+		}
+	} else if err := s.persistConfigLocked(ctx, candidate); err != nil {
 		s.mu.Unlock()
 		return nil, err
 	}
 	s.config = candidate
+	if pollingIdentityChanged {
+		s.rates = candidateRates
+	}
 	s.clearRoutesLocked()
 	delete(s.sessions, id)
 	stationType := station.Type
@@ -907,6 +936,16 @@ func (s *RelayStationService) UpdateStation(ctx context.Context, id string, inpu
 		return nil, err
 	}
 	return &view, nil
+}
+
+func relayStationPollingIdentityChanged(previous, current relayStation) bool {
+	return previous.Type != current.Type ||
+		previous.BaseURL != current.BaseURL ||
+		previous.ControlURL != current.ControlURL ||
+		previous.UIPassword != current.UIPassword ||
+		previous.ProxyToken != current.ProxyToken ||
+		previous.Username != current.Username ||
+		previous.Password != current.Password
 }
 
 func (s *RelayStationService) persistRelayAPIKey(ctx context.Context, stationID, sourceGroup string, key relayAPIKey) error {
@@ -1156,10 +1195,14 @@ func (s *RelayStationService) TestStation(ctx context.Context, id string) ([]Rel
 }
 
 func (s *RelayStationService) refreshRates(ctx context.Context, onlyStationID string) error {
+	return s.refreshRatesWithStationTimeout(ctx, onlyStationID, 0)
+}
+
+func (s *RelayStationService) refreshRatesWithStationTimeout(ctx context.Context, onlyStationID string, stationTimeout time.Duration) error {
 	if err := s.ensureLoaded(ctx); err != nil {
 		return err
 	}
-	snapshot := s.snapshotConfig()
+	snapshot, configRevision := s.snapshotConfigRevision()
 	requiredGroups := relayRequiredSourceGroups(snapshot, onlyStationID)
 	if onlyStationID != "" {
 		if _, ok := findRelayStation(snapshot.Stations, onlyStationID); !ok {
@@ -1170,34 +1213,65 @@ func (s *RelayStationService) refreshRates(ctx context.Context, onlyStationID st
 		return nil
 	}
 
-	now := time.Now().UTC()
-	updates := make(map[string]map[string]RelayStationRate, len(requiredGroups))
-	var pollErrors []error
+	type stationPollResult struct {
+		stationID   string
+		stationName string
+		rates       map[string]RelayStationRate
+		err         error
+	}
+	results := make(chan stationPollResult, len(requiredGroups))
+	pollCount := 0
 	for stationID, sourceGroups := range requiredGroups {
 		station, ok := findRelayStation(snapshot.Stations, stationID)
 		if !ok || !station.Enabled {
 			continue
 		}
-		rates, err := s.fetchStationRates(ctx, station, sourceGroups)
-		if err != nil {
-			pollErrors = append(pollErrors, fmt.Errorf("%s: %w", station.Name, err))
-			rates = make(map[string]RelayStationRate, len(sourceGroups))
-		}
-		for sourceGroup := range sourceGroups {
-			rate, exists := rates[sourceGroup]
-			if !exists {
-				rate = RelayStationRate{Status: RelayRateStatusUnavailable}
+		pollCount++
+		go func(stationID string, station relayStation, sourceGroups map[string]struct{}) {
+			stationCtx := ctx
+			cancel := func() {}
+			if stationTimeout > 0 {
+				stationCtx, cancel = context.WithTimeout(ctx, stationTimeout)
 			}
-			if rate.Status == "" {
-				rate.Status = RelayRateStatusUnavailable
+			rates, err := s.fetchStationRates(stationCtx, station, sourceGroups)
+			cancel()
+			if err != nil {
+				rates = make(map[string]RelayStationRate, len(sourceGroups))
 			}
-			rate.UpdatedAt = now
-			rates[sourceGroup] = rate
-		}
-		updates[stationID] = rates
+			updatedAt := time.Now().UTC()
+			for sourceGroup := range sourceGroups {
+				rate, exists := rates[sourceGroup]
+				if !exists {
+					rate = RelayStationRate{Status: RelayRateStatusUnavailable}
+				}
+				if rate.Status == "" {
+					rate.Status = RelayRateStatusUnavailable
+				}
+				rate.UpdatedAt = updatedAt
+				rates[sourceGroup] = rate
+			}
+			results <- stationPollResult{stationID: stationID, stationName: station.Name, rates: rates, err: err}
+		}(stationID, station, sourceGroups)
 	}
 
+	updates := make(map[string]map[string]RelayStationRate, pollCount)
+	var pollErrors []error
+	for range pollCount {
+		result := <-results
+		updates[result.stationID] = result.rates
+		if result.err != nil {
+			pollErrors = append(pollErrors, fmt.Errorf("%s: %w", result.stationName, result.err))
+		}
+	}
+
+	s.ratePublishMu.Lock()
+	defer s.ratePublishMu.Unlock()
+
 	s.mu.Lock()
+	if s.revision != configRevision {
+		s.mu.Unlock()
+		return errors.New("relay station configuration changed during rate refresh")
+	}
 	candidateRates := cloneRelayRates(s.rates)
 	if candidateRates.Rates == nil {
 		candidateRates.Rates = make(map[string]map[string]RelayStationRate)
@@ -1207,10 +1281,13 @@ func (s *RelayStationService) refreshRates(ctx context.Context, onlyStationID st
 			candidateRates.Rates[stationID] = make(map[string]RelayStationRate)
 		}
 		for sourceGroup, rate := range rates {
+			if current := candidateRates.Rates[stationID][sourceGroup]; current.UpdatedAt.After(rate.UpdatedAt) {
+				continue
+			}
 			candidateRates.Rates[stationID][sourceGroup] = rate
 		}
 	}
-	candidateRates.UpdatedAt = now
+	candidateRates.UpdatedAt = time.Now().UTC()
 	persistErr := s.persistRatesLocked(ctx, candidateRates)
 	if persistErr == nil {
 		s.rates = candidateRates
@@ -1219,7 +1296,7 @@ func (s *RelayStationService) refreshRates(ctx context.Context, onlyStationID st
 	if persistErr != nil {
 		return persistErr
 	}
-	if err := s.syncNativeRelayRates(ctx, snapshot, candidateRates); err != nil {
+	if err := s.syncNativeRelayRatesLocked(ctx, snapshot, candidateRates); err != nil {
 		return err
 	}
 	return errors.Join(pollErrors...)
@@ -1229,6 +1306,12 @@ func (s *RelayStationService) syncNativeRelayRates(ctx context.Context, snapshot
 	if s == nil {
 		return nil
 	}
+	s.ratePublishMu.Lock()
+	defer s.ratePublishMu.Unlock()
+	return s.syncNativeRelayRatesLocked(ctx, snapshot, rates)
+}
+
+func (s *RelayStationService) syncNativeRelayRatesLocked(ctx context.Context, snapshot relayStationConfig, rates relayRateCache) error {
 	if s.accountRepo == nil {
 		return s.syncRelayGroupRateMultipliers(ctx, snapshot, rates)
 	}
@@ -1668,9 +1751,14 @@ func (s *RelayStationService) EstimateProfit(ctx context.Context, start, end tim
 }
 
 func (s *RelayStationService) snapshotConfig() relayStationConfig {
+	config, _ := s.snapshotConfigRevision()
+	return config
+}
+
+func (s *RelayStationService) snapshotConfigRevision() (relayStationConfig, uint64) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return cloneRelayConfig(s.config)
+	return cloneRelayConfig(s.config), s.revision
 }
 
 func (s *RelayStationService) snapshotRates() relayRateCache {

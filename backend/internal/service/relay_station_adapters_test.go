@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -965,9 +966,55 @@ func TestListStationsReadsSeparateAIHubBalances(t *testing.T) {
 	}
 }
 
-type relayCredentialSettingRepo struct{ fakeSettingRepo }
+type relayCredentialSettingRepo struct {
+	fakeSettingRepo
+	mu               sync.Mutex
+	setMultipleCalls int
+	setMultipleErr   error
+}
 
 func (*relayCredentialSettingRepo) Set(context.Context, string, string) error { return nil }
+
+func (r *relayCredentialSettingRepo) SetMultiple(context.Context, map[string]string) error {
+	r.mu.Lock()
+	r.setMultipleCalls++
+	err := r.setMultipleErr
+	r.mu.Unlock()
+	return err
+}
+
+type blockingRelayRateAccountRepo struct {
+	AccountRepository
+	mu                 sync.Mutex
+	account            Account
+	updates            []map[string]any
+	applied            []map[string]any
+	firstUpdateStarted chan struct{}
+	releaseFirstUpdate chan struct{}
+}
+
+func (r *blockingRelayRateAccountRepo) FindByExtraField(context.Context, string, any) ([]Account, error) {
+	return []Account{r.account}, nil
+}
+
+func (r *blockingRelayRateAccountRepo) UpdateExtra(_ context.Context, _ int64, updates map[string]any) error {
+	r.mu.Lock()
+	call := len(r.updates)
+	copy := make(map[string]any, len(updates))
+	for key, value := range updates {
+		copy[key] = value
+	}
+	r.updates = append(r.updates, copy)
+	r.mu.Unlock()
+	if call == 0 {
+		close(r.firstUpdateStarted)
+		<-r.releaseFirstUpdate
+	}
+	r.mu.Lock()
+	r.applied = append(r.applied, copy)
+	r.mu.Unlock()
+	return nil
+}
 
 func TestForwardDiscoversNewAPIGroupKey(t *testing.T) {
 	forwarded := false
@@ -1074,5 +1121,327 @@ func TestForwardDiscoversSub2APIGroupKey(t *testing.T) {
 	_ = response.Body.Close()
 	if !forwarded {
 		t.Fatal("sub2api request was not forwarded")
+	}
+}
+
+func TestRatePublicationDoesNotRegressAccountSnapshot(t *testing.T) {
+	station := relayStation{ID: "station", Type: RelayStationTypeNewAPI, Enabled: true}
+	source := RelayStationSource{StationID: station.ID, SourceGroup: "vip", Enabled: true}
+	accountKey := relaySourceAccountKey(station.ID, 1, source)
+	repo := &blockingRelayRateAccountRepo{
+		account:            Account{ID: 1, Extra: map[string]any{relayAccountKeyKey: accountKey}},
+		firstUpdateStarted: make(chan struct{}),
+		releaseFirstUpdate: make(chan struct{}),
+	}
+	service := &RelayStationService{accountRepo: repo}
+	oldRate := 0.2
+	newRate := 0.1
+	oldTime := time.Now().Add(-time.Minute).UTC()
+	newTime := time.Now().UTC()
+	oldSnapshot := relayRateCache{Rates: map[string]map[string]RelayStationRate{
+		station.ID: {"vip": {Rate: &oldRate, Status: RelayRateStatusReady, UpdatedAt: oldTime}},
+	}}
+	newSnapshot := relayRateCache{Rates: map[string]map[string]RelayStationRate{
+		station.ID: {"vip": {Rate: &newRate, Status: RelayRateStatusReady, UpdatedAt: newTime}},
+	}}
+	config := relayStationConfig{
+		Stations: []relayStation{station},
+		Bindings: []RelayGroupBinding{{GroupID: 1, Sources: []RelayStationSource{source}}},
+	}
+
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- service.syncNativeRelayRates(context.Background(), config, oldSnapshot) }()
+	<-repo.firstUpdateStarted
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- service.syncNativeRelayRates(context.Background(), config, newSnapshot) }()
+	select {
+	case err := <-secondDone:
+		t.Fatalf("newer publication bypassed serialization: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(repo.releaseFirstUpdate)
+	if err := <-firstDone; err != nil {
+		t.Fatalf("publish old snapshot: %v", err)
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatalf("publish new snapshot: %v", err)
+	}
+	repo.mu.Lock()
+	defer repo.mu.Unlock()
+	if len(repo.applied) != 2 || repo.applied[1]["relay_rate_updated_at"] != newTime.Format(time.RFC3339Nano) {
+		t.Fatalf("applied relay snapshots = %#v, want newer timestamp last", repo.applied)
+	}
+}
+
+func TestStationPollingIdentityUpdateInvalidatesRates(t *testing.T) {
+	oldRate := 0.08
+	station := relayStation{
+		ID: "station", Type: RelayStationTypeNewAPI, Name: "Station", BaseURL: "https://old.example.com", ControlURL: "https://old.example.com",
+		Username: "admin", Password: "old-password", Enabled: true,
+	}
+	repo := &relayNativeAccountRepo{accounts: []Account{{
+		ID: 1, Extra: map[string]any{relayAccountMarkerKey: true, relayAccountKeyKey: relaySourceAccountKey(station.ID, 1, RelayStationSource{StationID: station.ID, SourceGroup: "vip"})},
+	}}}
+	settingRepo := &relayCredentialSettingRepo{}
+	service := &RelayStationService{
+		settingRepo: settingRepo,
+		groupRepo:   &relayGroupMultiplierRepo{groups: map[int64]*Group{1: {ID: 1, Platform: PlatformOpenAI}}},
+		accountRepo: repo,
+		sessions:    make(map[string]*relayStationSession),
+		loaded:      true,
+		config: relayStationConfig{
+			Stations: []relayStation{station},
+			Bindings: []RelayGroupBinding{{GroupID: 1, Sources: []RelayStationSource{{StationID: station.ID, SourceGroup: "vip", Enabled: true}}}},
+		},
+		rates: relayRateCache{Rates: map[string]map[string]RelayStationRate{
+			station.ID: {"vip": {Rate: &oldRate, Status: RelayRateStatusReady, UpdatedAt: time.Now().UTC()}},
+		}},
+	}
+	newBaseURL := "https://new.example.com"
+	if _, err := service.UpdateStation(context.Background(), station.ID, RelayStationUpdateInput{BaseURL: &newBaseURL}); err != nil {
+		t.Fatalf("update station endpoint: %v", err)
+	}
+	if _, found := service.snapshotRates().Rates[station.ID]; found {
+		t.Fatal("old station rates remained after polling identity update")
+	}
+	settingRepo.mu.Lock()
+	setMultipleCalls := settingRepo.setMultipleCalls
+	settingRepo.mu.Unlock()
+	if setMultipleCalls != 1 {
+		t.Fatalf("SetMultiple calls = %d, want one atomic config/rate update", setMultipleCalls)
+	}
+	if got := repo.extraUpdates[1]["relay_effective_rate"]; got != nil {
+		t.Fatalf("relay effective rate = %v, want unavailable after station endpoint update", got)
+	}
+}
+
+func TestStationPollingIdentityUpdateIsAtomicOnPersistenceFailure(t *testing.T) {
+	oldRate := 0.08
+	station := relayStation{ID: "station", Type: RelayStationTypeNewAPI, Name: "Station", BaseURL: "https://old.example.com", ControlURL: "https://old.example.com", Enabled: true}
+	settingRepo := &relayCredentialSettingRepo{setMultipleErr: errors.New("database unavailable")}
+	service := &RelayStationService{
+		settingRepo: settingRepo,
+		loaded:      true,
+		config:      relayStationConfig{Stations: []relayStation{station}},
+		rates: relayRateCache{Rates: map[string]map[string]RelayStationRate{
+			station.ID: {"vip": {Rate: &oldRate, Status: RelayRateStatusReady, UpdatedAt: time.Now().UTC()}},
+		}},
+	}
+	newBaseURL := "https://new.example.com"
+	if _, err := service.UpdateStation(context.Background(), station.ID, RelayStationUpdateInput{BaseURL: &newBaseURL}); err == nil {
+		t.Fatal("polling identity update succeeded despite atomic persistence failure")
+	}
+	if got := service.snapshotConfig().Stations[0].BaseURL; got != station.BaseURL {
+		t.Fatalf("station base URL = %q, want original %q after failed atomic update", got, station.BaseURL)
+	}
+	if rate := service.snapshotRates().Rates[station.ID]["vip"]; rate.Rate == nil || *rate.Rate != oldRate {
+		t.Fatalf("station rate = %#v, want original rate after failed atomic update", rate)
+	}
+}
+
+func TestRateRefreshRejectsSupersededConfiguration(t *testing.T) {
+	pricingStarted := make(chan struct{})
+	releasePricing := make(chan struct{})
+	var releasePricingOnce sync.Once
+	defer releasePricingOnce.Do(func() { close(releasePricing) })
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/user/login":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"access_token":"dashboard"}}`))
+		case "/api/pricing":
+			close(pricingStarted)
+			<-releasePricing
+			_, _ = w.Write([]byte(`{"success":true,"group_ratio":{"vip":0.08}}`))
+		default:
+			t.Errorf("unexpected station endpoint: %s", r.URL.Path)
+		}
+	}))
+	defer upstream.Close()
+	station := relayStation{ID: "station", Type: RelayStationTypeNewAPI, BaseURL: upstream.URL, ControlURL: upstream.URL, Username: "admin", Password: "password", Enabled: true}
+	service := &RelayStationService{
+		settingRepo: &relayCredentialSettingRepo{}, sessions: make(map[string]*relayStationSession), loaded: true,
+		config: relayStationConfig{
+			Stations: []relayStation{station},
+			Bindings: []RelayGroupBinding{{GroupID: 1, Sources: []RelayStationSource{{StationID: station.ID, SourceGroup: "vip", Enabled: true}}}},
+		},
+	}
+	refreshDone := make(chan error, 1)
+	go func() { refreshDone <- service.refreshRates(context.Background(), "") }()
+	<-pricingStarted
+	service.mu.Lock()
+	service.revision++
+	service.mu.Unlock()
+	releasePricingOnce.Do(func() { close(releasePricing) })
+	if err := <-refreshDone; err == nil || !strings.Contains(err.Error(), "configuration changed") {
+		t.Fatalf("refresh error = %v, want superseded configuration rejection", err)
+	}
+	if _, found := service.snapshotRates().Rates[station.ID]; found {
+		t.Fatal("superseded station rates were published")
+	}
+}
+
+func TestAIHubActivationPublishesPolicyBeforeBecomingActive(t *testing.T) {
+	configStarted := make(chan struct{})
+	releaseConfig := make(chan struct{})
+	var releaseConfigOnce sync.Once
+	defer releaseConfigOnce.Do(func() { close(releaseConfig) })
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/ctl/login":
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		case "/ctl/config":
+			close(configStarted)
+			<-releaseConfig
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		default:
+			t.Errorf("unexpected AIHub endpoint: %s", r.URL.Path)
+		}
+	}))
+	defer upstream.Close()
+	station := relayStation{ID: "station", Type: RelayStationTypeAIHub, BaseURL: upstream.URL, ControlURL: upstream.URL, Username: "user", Password: "password", Enabled: true}
+	service := NewRelayStationService(nil, nil, nil, nil, nil)
+	policy := relayAIHubConfig{Mode: "economy"}
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := service.activateAIHubStation(context.Background(), station, "runtime", &policy, false)
+		firstDone <- err
+	}()
+	<-configStarted
+	waitCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := service.activateAIHubStation(waitCtx, station, "runtime", &policy, false); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("activation while initial policy is pending = %v, want deadline exceeded", err)
+	}
+	releaseConfigOnce.Do(func() { close(releaseConfig) })
+	if err := <-firstDone; err != nil {
+		t.Fatalf("activate runtime with initial policy: %v", err)
+	}
+}
+
+func TestAIHubActivationLocksAreRuntimeScopedAndCancellable(t *testing.T) {
+	started := make(chan string, 2)
+	release := make(chan struct{})
+	released := false
+	defer func() {
+		if !released {
+			close(release)
+		}
+	}()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		runtimeID := r.Header.Get(relayAIHubAccountHeader)
+		started <- runtimeID
+		if runtimeID == "blocked" {
+			<-release
+		}
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer upstream.Close()
+	station := relayStation{
+		ID: "station", Type: RelayStationTypeAIHub, BaseURL: upstream.URL, ControlURL: upstream.URL,
+		Username: "user", Password: "password", Enabled: true,
+	}
+	service := NewRelayStationService(nil, nil, nil, nil, nil)
+	blockedDone := make(chan error, 1)
+	go func() {
+		_, err := service.activateAIHubStation(context.Background(), station, "blocked", nil, false)
+		blockedDone <- err
+	}()
+	if runtimeID := <-started; runtimeID != "blocked" {
+		t.Fatalf("first runtime = %q, want blocked", runtimeID)
+	}
+
+	otherDone := make(chan error, 1)
+	go func() {
+		_, err := service.activateAIHubStation(context.Background(), station, "other", nil, false)
+		otherDone <- err
+	}()
+	select {
+	case runtimeID := <-started:
+		if runtimeID != "other" {
+			t.Fatalf("concurrent runtime = %q, want other", runtimeID)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("distinct AIHub runtime was blocked by another runtime login")
+	}
+	if err := <-otherDone; err != nil {
+		t.Fatalf("activate other runtime: %v", err)
+	}
+
+	waitCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := service.activateAIHubStation(waitCtx, station, "blocked", nil, false); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("same-runtime canceled waiter error = %v, want deadline exceeded", err)
+	}
+	close(release)
+	released = true
+	if err := <-blockedDone; err != nil {
+		t.Fatalf("activate blocked runtime: %v", err)
+	}
+}
+
+func TestBackgroundRateRefreshIsolatesStationTimeouts(t *testing.T) {
+	started := make(chan string, 2)
+	releaseSlow := make(chan struct{})
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started <- "slow"
+		select {
+		case <-r.Context().Done():
+		case <-releaseSlow:
+		}
+	}))
+	defer slow.Close()
+	defer close(releaseSlow)
+	fast := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/user/login":
+			started <- "fast"
+			_, _ = w.Write([]byte(`{"success":true,"data":{"access_token":"dashboard"}}`))
+		case "/api/pricing":
+			_, _ = w.Write([]byte(`{"success":true,"group_ratio":{"vip":0.08}}`))
+		default:
+			t.Errorf("unexpected fast station endpoint: %s", r.URL.Path)
+		}
+	}))
+	defer fast.Close()
+
+	service := &RelayStationService{
+		settingRepo: &relayCredentialSettingRepo{},
+		sessions:    make(map[string]*relayStationSession),
+		loaded:      true,
+		config: relayStationConfig{
+			Stations: []relayStation{
+				{ID: "slow", Type: RelayStationTypeNewAPI, Name: "Slow", BaseURL: slow.URL, ControlURL: slow.URL, Username: "admin", Password: "password", Enabled: true},
+				{ID: "fast", Type: RelayStationTypeNewAPI, Name: "Fast", BaseURL: fast.URL, ControlURL: fast.URL, Username: "admin", Password: "password", Enabled: true},
+			},
+			Bindings: []RelayGroupBinding{{
+				GroupID: 1,
+				Sources: []RelayStationSource{
+					{StationID: "slow", SourceGroup: "vip", Enabled: true},
+					{StationID: "fast", SourceGroup: "vip", Enabled: true},
+				},
+			}},
+		},
+	}
+
+	refreshDone := make(chan error, 1)
+	go func() {
+		refreshDone <- service.refreshRatesWithStationTimeout(context.Background(), "", time.Second)
+	}()
+	seen := map[string]bool{}
+	for len(seen) < 2 {
+		select {
+		case station := <-started:
+			seen[station] = true
+		case <-time.After(500 * time.Millisecond):
+			t.Fatal("station polls did not start concurrently")
+		}
+	}
+	if err := <-refreshDone; err == nil {
+		t.Fatal("slow station timeout should be reported")
+	}
+
+	rate := service.snapshotRates().Rates["fast"]["vip"]
+	if rate.Status != RelayRateStatusReady || rate.Rate == nil || *rate.Rate != 0.08 {
+		t.Fatalf("fast station rate = %#v, want ready 0.08 after slow station timeout", rate)
 	}
 }

@@ -158,15 +158,12 @@ func (s *RelayStationService) fetchAIHubRates(ctx context.Context, station relay
 func (s *RelayStationService) fetchAIHubRate(ctx context.Context, station relayStation, policyKey string) (RelayStationRate, error) {
 	runtimeID := relayAIHubRuntimeID(station.ID, policyKey)
 	policy, policyConfigured := s.aiHubConfigForKey(station.ID, policyKey)
-	activated, err := s.activateAIHubStation(ctx, station, runtimeID)
-	if err != nil {
-		return RelayStationRate{}, err
+	var initialPolicy *relayAIHubConfig
+	if policyConfigured {
+		initialPolicy = &policy
 	}
-	if activated && policyConfigured {
-		if err := s.postAIHubConfigRequest(ctx, station, policy, runtimeID); err != nil {
-			s.clearActiveAIHubStation(runtimeID)
-			return RelayStationRate{}, err
-		}
+	if _, err := s.activateAIHubStation(ctx, station, runtimeID, initialPolicy, false); err != nil {
+		return RelayStationRate{}, err
 	}
 
 	endpoint, err := relayEndpoint(station.ControlURL, "/ctl/status")
@@ -239,15 +236,12 @@ func (s *RelayStationService) fetchAIHubBalance(ctx context.Context, station rel
 	s.applyAIHubConnectionDefaults(&station)
 	policyKey, policy, policyConfigured := s.aiHubPolicyForStation(station.ID)
 	runtimeID := relayAIHubRuntimeID(station.ID, policyKey)
-	activated, err := s.activateAIHubStation(ctx, station, runtimeID)
-	if err != nil {
-		return nil, err
+	var initialPolicy *relayAIHubConfig
+	if policyConfigured {
+		initialPolicy = &policy
 	}
-	if activated && policyConfigured {
-		if err := s.postAIHubConfigRequest(ctx, station, policy, runtimeID); err != nil {
-			s.clearActiveAIHubStation(runtimeID)
-			return nil, err
-		}
+	if _, err := s.activateAIHubStation(ctx, station, runtimeID, initialPolicy, false); err != nil {
+		return nil, err
 	}
 
 	endpoint, err := relayEndpoint(station.ControlURL, "/ctl/account")
@@ -284,33 +278,76 @@ func (s *RelayStationService) fetchAIHubBalance(ctx context.Context, station rel
 	return cloneFloat64(payload.Balance), nil
 }
 
-func (s *RelayStationService) activateAIHubStation(ctx context.Context, station relayStation, runtimeID string) (bool, error) {
+func (s *RelayStationService) activateAIHubStation(ctx context.Context, station relayStation, runtimeID string, policy *relayAIHubConfig, forceConfig bool) (bool, error) {
 	s.aihubMu.Lock()
-	defer s.aihubMu.Unlock()
+	if s.aihubLocks == nil {
+		s.aihubLocks = make(map[string]*contextMutex)
+	}
+	lock := s.aihubLocks[runtimeID]
+	if lock == nil {
+		lock = newContextMutex()
+		s.aihubLocks[runtimeID] = lock
+	}
+	s.aihubMu.Unlock()
+
+	if err := lock.Lock(ctx); err != nil {
+		return false, err
+	}
+	defer lock.Unlock()
+
+	s.aihubMu.Lock()
 	if s.activeAIHubStations == nil {
 		s.activeAIHubStations = make(map[string]struct{})
 	}
-	if _, active := s.activeAIHubStations[runtimeID]; active {
+	if s.aihubRuntimeEpoch == nil {
+		s.aihubRuntimeEpoch = make(map[string]uint64)
+	}
+	_, active := s.activeAIHubStations[runtimeID]
+	if active && !forceConfig {
+		s.aihubMu.Unlock()
 		return false, nil
 	}
-	if station.Username != "" && station.Password != "" {
+	globalEpoch := s.aihubEpoch
+	runtimeEpoch := s.aihubRuntimeEpoch[runtimeID]
+	s.aihubMu.Unlock()
+
+	if !active && station.Username != "" && station.Password != "" {
 		if err := s.loginAIHubStation(ctx, station, runtimeID); err != nil {
 			return false, err
 		}
 	}
+	if policy != nil {
+		if err := s.postAIHubConfigRequest(ctx, station, *policy, runtimeID); err != nil {
+			s.aihubMu.Lock()
+			delete(s.activeAIHubStations, runtimeID)
+			s.aihubMu.Unlock()
+			return false, err
+		}
+	}
+	s.aihubMu.Lock()
+	if s.aihubEpoch != globalEpoch || s.aihubRuntimeEpoch[runtimeID] != runtimeEpoch {
+		s.aihubMu.Unlock()
+		return false, errors.New("aihub activation was invalidated")
+	}
 	s.activeAIHubStations[runtimeID] = struct{}{}
-	return true, nil
+	s.aihubMu.Unlock()
+	return !active, nil
 }
 
 func (s *RelayStationService) clearActiveAIHubStation(stationID string) {
 	s.aihubMu.Lock()
 	defer s.aihubMu.Unlock()
+	if s.aihubRuntimeEpoch == nil {
+		s.aihubRuntimeEpoch = make(map[string]uint64)
+	}
 	if stationID == "" {
+		s.aihubEpoch++
 		s.activeAIHubStations = make(map[string]struct{})
 		return
 	}
-	for runtimeID := range s.activeAIHubStations {
+	for runtimeID := range s.aihubLocks {
 		if runtimeID == stationID || strings.HasPrefix(runtimeID, stationID+":") {
+			s.aihubRuntimeEpoch[runtimeID]++
 			delete(s.activeAIHubStations, runtimeID)
 		}
 	}
@@ -846,14 +883,8 @@ func (s *RelayStationService) postAIHubConfig(ctx context.Context, station relay
 	if station.Type != RelayStationTypeAIHub || !station.Enabled {
 		return nil
 	}
-	if _, err := s.activateAIHubStation(ctx, station, runtimeID); err != nil {
-		return err
-	}
-	if err := s.postAIHubConfigRequest(ctx, station, policy, runtimeID); err != nil {
-		s.clearActiveAIHubStation(runtimeID)
-		return err
-	}
-	return nil
+	_, err := s.activateAIHubStation(ctx, station, runtimeID, &policy, true)
+	return err
 }
 
 func (s *RelayStationService) postAIHubConfigRequest(ctx context.Context, station relayStation, policy relayAIHubConfig, runtimeID string) error {
@@ -1478,15 +1509,9 @@ func (s *RelayStationService) forward(ctx context.Context, account *Account, rou
 
 	if station.Type == RelayStationTypeAIHub {
 		runtimeID := relayAIHubRuntimeID(station.ID, route.source.PolicyKey)
-		activated, err := s.activateAIHubStation(ctx, station, runtimeID)
-		if err != nil {
+		policy := relayAIHubPolicyForSource(route.source)
+		if _, err := s.activateAIHubStation(ctx, station, runtimeID, &policy, false); err != nil {
 			return nil, err
-		}
-		if activated {
-			if err := s.postAIHubConfigRequest(ctx, station, relayAIHubPolicyForSource(route.source), runtimeID); err != nil {
-				s.clearActiveAIHubStation(runtimeID)
-				return nil, err
-			}
 		}
 		if token := strings.TrimSpace(station.ProxyToken); token != "" {
 			outbound.Header.Set("Authorization", "Bearer "+token)
