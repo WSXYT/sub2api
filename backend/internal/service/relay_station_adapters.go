@@ -143,94 +143,96 @@ func (s *RelayStationService) fetchStationRates(ctx context.Context, station rel
 
 func (s *RelayStationService) fetchAIHubRates(ctx context.Context, station relayStation, required map[string]struct{}) (map[string]RelayStationRate, error) {
 	s.applyAIHubConnectionDefaults(&station)
-	activated, err := s.activateAIHubStation(ctx, station)
-	if err != nil {
-		return nil, err
+	result := make(map[string]RelayStationRate, len(required))
+	for policyKey := range required {
+		rate, err := s.fetchAIHubRate(ctx, station, policyKey)
+		if err != nil {
+			return nil, err
+		}
+		result[policyKey] = rate
 	}
-	if activated {
-		if policy, ok := s.aiHubConfigForStation(station.ID); ok {
-			if err := s.postAIHubConfigRequest(ctx, station, policy); err != nil {
-				s.clearActiveAIHubStation(station.ID)
-				return nil, err
-			}
+	return result, nil
+}
+
+func (s *RelayStationService) fetchAIHubRate(ctx context.Context, station relayStation, policyKey string) (RelayStationRate, error) {
+	runtimeID := relayAIHubRuntimeID(station.ID, policyKey)
+	policy, policyConfigured := s.aiHubConfigForKey(station.ID, policyKey)
+	activated, err := s.activateAIHubStation(ctx, station, runtimeID)
+	if err != nil {
+		return RelayStationRate{}, err
+	}
+	if activated && policyConfigured {
+		if err := s.postAIHubConfigRequest(ctx, station, policy, runtimeID); err != nil {
+			s.clearActiveAIHubStation(runtimeID)
+			return RelayStationRate{}, err
 		}
 	}
 
 	endpoint, err := relayEndpoint(station.ControlURL, "/ctl/status")
 	if err != nil {
-		return nil, err
+		return RelayStationRate{}, err
 	}
 	if err := s.validateRelayURL(endpoint); err != nil {
-		return nil, err
+		return RelayStationRate{}, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return nil, err
+		return RelayStationRate{}, err
 	}
 	req.Header.Set("x-ui-password", station.UIPassword)
-	req.Header.Set(relayAIHubAccountHeader, station.ID)
+	req.Header.Set(relayAIHubAccountHeader, runtimeID)
 	client, err := newRelayControlClient()
 	if err != nil {
-		return nil, err
+		return RelayStationRate{}, err
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("request aihub status: %w", err)
+		return RelayStationRate{}, fmt.Errorf("request aihub status: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, &relayHTTPStatusError{status: resp.StatusCode}
+		return RelayStationRate{}, &relayHTTPStatusError{status: resp.StatusCode}
 	}
-
 	var payload struct {
-		CurrentGroupID   *int64                      `json:"currentGroupId"`
-		CurrentCode      string                      `json:"currentCode"`
 		SuggestedGroupID *int64                      `json:"suggestedGroupId"`
 		SuggestedCode    string                      `json:"suggestedCode"`
 		SuggestedRate    *float64                    `json:"suggestedRate"`
 		Candidates       []relayAIHubStatusCandidate `json:"candidates"`
 	}
 	if err := decodeRelayJSON(resp.Body, &payload); err != nil {
-		return nil, err
+		return RelayStationRate{}, err
 	}
-
-	candidates := make(map[string]relayAIHubStatusCandidate, len(payload.Candidates))
-	for _, candidate := range payload.Candidates {
-		candidates[candidate.Code] = candidate
-	}
-
-	result := make(map[string]RelayStationRate, len(required))
-	for sourceGroup := range required {
-		if sourceGroup == "default" {
-			rate := aggregateAIHubRouterRate(payload.Candidates)
-			rate.SuggestedGroupID = cloneInt64Pointer(payload.SuggestedGroupID)
-			rate.SuggestedGroupCode = payload.SuggestedCode
-			rate.SuggestedRate = cloneFloat64(payload.SuggestedRate)
-			result[sourceGroup] = rate
-			continue
+	rate := RelayStationRate{Status: RelayRateStatusUnavailable}
+	if policyConfigured || policyKey == "" || policyKey == "default" {
+		rate = aggregateAIHubRouterRate(payload.Candidates)
+	} else if candidate, found := func() (relayAIHubStatusCandidate, bool) {
+		for _, item := range payload.Candidates {
+			if item.Code == policyKey {
+				return item, true
+			}
 		}
-		candidate, found := candidates[sourceGroup]
-		if !found || candidate.Rate == nil || candidate.Excluded {
-			result[sourceGroup] = RelayStationRate{Status: RelayRateStatusUnavailable}
-			continue
-		}
-		result[sourceGroup] = RelayStationRate{Rate: cloneFloat64(candidate.Rate), Status: RelayRateStatusReady, SupportedModels: append([]string(nil), candidate.Models...), SuggestedGroupID: cloneInt64Pointer(payload.SuggestedGroupID), SuggestedGroupCode: payload.SuggestedCode, SuggestedRate: cloneFloat64(payload.SuggestedRate)}
+		return relayAIHubStatusCandidate{}, false
+	}(); found && candidate.Rate != nil && !candidate.Excluded {
+		rate = RelayStationRate{Rate: cloneFloat64(candidate.Rate), Status: RelayRateStatusReady, SupportedModels: append([]string(nil), candidate.Models...)}
 	}
-	return result, nil
+	rate.SuggestedGroupID = cloneInt64Pointer(payload.SuggestedGroupID)
+	rate.SuggestedGroupCode = payload.SuggestedCode
+	rate.SuggestedRate = cloneFloat64(payload.SuggestedRate)
+	return rate, nil
 }
 
 func (s *RelayStationService) fetchAIHubBalance(ctx context.Context, station relayStation) (*float64, error) {
 	s.applyAIHubConnectionDefaults(&station)
-	activated, err := s.activateAIHubStation(ctx, station)
+	policyKey, policy, policyConfigured := s.aiHubPolicyForStation(station.ID)
+	runtimeID := relayAIHubRuntimeID(station.ID, policyKey)
+	activated, err := s.activateAIHubStation(ctx, station, runtimeID)
 	if err != nil {
 		return nil, err
 	}
-	if activated {
-		if policy, ok := s.aiHubConfigForStation(station.ID); ok {
-			if err := s.postAIHubConfigRequest(ctx, station, policy); err != nil {
-				s.clearActiveAIHubStation(station.ID)
-				return nil, err
-			}
+	if activated && policyConfigured {
+		if err := s.postAIHubConfigRequest(ctx, station, policy, runtimeID); err != nil {
+			s.clearActiveAIHubStation(runtimeID)
+			return nil, err
 		}
 	}
 
@@ -246,7 +248,7 @@ func (s *RelayStationService) fetchAIHubBalance(ctx context.Context, station rel
 		return nil, err
 	}
 	req.Header.Set("x-ui-password", station.UIPassword)
-	req.Header.Set(relayAIHubAccountHeader, station.ID)
+	req.Header.Set(relayAIHubAccountHeader, runtimeID)
 	client, err := newRelayControlClient()
 	if err != nil {
 		return nil, err
@@ -268,21 +270,21 @@ func (s *RelayStationService) fetchAIHubBalance(ctx context.Context, station rel
 	return cloneFloat64(payload.Balance), nil
 }
 
-func (s *RelayStationService) activateAIHubStation(ctx context.Context, station relayStation) (bool, error) {
+func (s *RelayStationService) activateAIHubStation(ctx context.Context, station relayStation, runtimeID string) (bool, error) {
 	s.aihubMu.Lock()
 	defer s.aihubMu.Unlock()
 	if s.activeAIHubStations == nil {
 		s.activeAIHubStations = make(map[string]struct{})
 	}
-	if _, active := s.activeAIHubStations[station.ID]; active {
+	if _, active := s.activeAIHubStations[runtimeID]; active {
 		return false, nil
 	}
 	if station.Username != "" && station.Password != "" {
-		if err := s.loginAIHubStation(ctx, station); err != nil {
+		if err := s.loginAIHubStation(ctx, station, runtimeID); err != nil {
 			return false, err
 		}
 	}
-	s.activeAIHubStations[station.ID] = struct{}{}
+	s.activeAIHubStations[runtimeID] = struct{}{}
 	return true, nil
 }
 
@@ -293,10 +295,14 @@ func (s *RelayStationService) clearActiveAIHubStation(stationID string) {
 		s.activeAIHubStations = make(map[string]struct{})
 		return
 	}
-	delete(s.activeAIHubStations, stationID)
+	for runtimeID := range s.activeAIHubStations {
+		if runtimeID == stationID || strings.HasPrefix(runtimeID, stationID+":") {
+			delete(s.activeAIHubStations, runtimeID)
+		}
+	}
 }
 
-func (s *RelayStationService) loginAIHubStation(ctx context.Context, station relayStation) error {
+func (s *RelayStationService) loginAIHubStation(ctx context.Context, station relayStation, runtimeID string) error {
 	endpoint, err := relayEndpoint(station.ControlURL, "/ctl/login")
 	if err != nil {
 		return err
@@ -311,7 +317,7 @@ func (s *RelayStationService) loginAIHubStation(ctx context.Context, station rel
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-ui-password", station.UIPassword)
-	req.Header.Set(relayAIHubAccountHeader, station.ID)
+	req.Header.Set(relayAIHubAccountHeader, runtimeID)
 	client, err := newRelayControlClient()
 	if err != nil {
 		return err
@@ -327,10 +333,26 @@ func (s *RelayStationService) loginAIHubStation(ctx context.Context, station rel
 	return nil
 }
 
-func (s *RelayStationService) aiHubConfigForStation(stationID string) (relayAIHubConfig, bool) {
+func (s *RelayStationService) aiHubPolicyForStation(stationID string) (string, relayAIHubConfig, bool) {
 	for _, binding := range s.snapshotConfig().Bindings {
 		for _, source := range binding.Sources {
 			if source.StationID == stationID && source.Enabled {
+				return source.PolicyKey, relayAIHubPolicyForSource(source), true
+			}
+		}
+	}
+	return "", relayAIHubConfig{}, false
+}
+
+func (s *RelayStationService) aiHubConfigForStation(stationID string) (relayAIHubConfig, bool) {
+	_, policy, ok := s.aiHubPolicyForStation(stationID)
+	return policy, ok
+}
+
+func (s *RelayStationService) aiHubConfigForKey(stationID, policyKey string) (relayAIHubConfig, bool) {
+	for _, binding := range s.snapshotConfig().Bindings {
+		for _, source := range binding.Sources {
+			if source.StationID == stationID && source.Enabled && (source.PolicyKey == policyKey || (source.PolicyKey == "" && policyKey == source.SourceGroup)) {
 				return relayAIHubPolicyForSource(source), true
 			}
 		}
@@ -653,9 +675,7 @@ func loginSub2APIStation(ctx context.Context, service *RelayStationService, stat
 	}, nil
 }
 
-// SyncAIHubConfig applies each aihub-auto instance's real global policy.
-// aihub-auto selects its upstream AIHub group itself; it has no per-source
-// `groups` configuration endpoint.
+// SyncAIHubConfig applies each binding policy to its isolated managed runtime.
 func (s *RelayStationService) SyncAIHubConfig(ctx context.Context) error {
 	if err := s.ensureLoaded(ctx); err != nil {
 		return err
@@ -666,13 +686,20 @@ func (s *RelayStationService) SyncAIHubConfig(ctx context.Context) error {
 		if station.Type != RelayStationTypeAIHub || !station.Enabled {
 			continue
 		}
-		policy, ok := s.aiHubConfigForStation(station.ID)
-		if !ok {
-			continue
+		policies := make(map[string]relayAIHubConfig)
+		for _, binding := range configSnapshot.Bindings {
+			for _, source := range binding.Sources {
+				if source.StationID == station.ID && source.Enabled {
+					policies[source.PolicyKey] = relayAIHubPolicyForSource(source)
+				}
+			}
 		}
-		s.applyAIHubConnectionDefaults(&station)
-		if err := s.postAIHubConfig(ctx, station, policy); err != nil {
-			syncErrors = append(syncErrors, err)
+		for policyKey, policy := range policies {
+			runtimeID := relayAIHubRuntimeID(station.ID, policyKey)
+			s.applyAIHubConnectionDefaults(&station)
+			if err := s.postAIHubConfig(ctx, station, policy, runtimeID); err != nil {
+				syncErrors = append(syncErrors, err)
+			}
 		}
 	}
 	return errors.Join(syncErrors...)
@@ -684,22 +711,22 @@ type relayAIHubConfig struct {
 	PriceBand        *RelayPriceBand `json:"priceBand"`
 }
 
-func (s *RelayStationService) postAIHubConfig(ctx context.Context, station relayStation, policy relayAIHubConfig) error {
+func (s *RelayStationService) postAIHubConfig(ctx context.Context, station relayStation, policy relayAIHubConfig, runtimeID string) error {
 	s.applyAIHubConnectionDefaults(&station)
 	if station.Type != RelayStationTypeAIHub || !station.Enabled {
 		return nil
 	}
-	if _, err := s.activateAIHubStation(ctx, station); err != nil {
+	if _, err := s.activateAIHubStation(ctx, station, runtimeID); err != nil {
 		return err
 	}
-	if err := s.postAIHubConfigRequest(ctx, station, policy); err != nil {
-		s.clearActiveAIHubStation(station.ID)
+	if err := s.postAIHubConfigRequest(ctx, station, policy, runtimeID); err != nil {
+		s.clearActiveAIHubStation(runtimeID)
 		return err
 	}
 	return nil
 }
 
-func (s *RelayStationService) postAIHubConfigRequest(ctx context.Context, station relayStation, policy relayAIHubConfig) error {
+func (s *RelayStationService) postAIHubConfigRequest(ctx context.Context, station relayStation, policy relayAIHubConfig, runtimeID string) error {
 	endpoint, err := relayEndpoint(station.ControlURL, "/ctl/config")
 	if err != nil {
 		return err
@@ -717,7 +744,7 @@ func (s *RelayStationService) postAIHubConfigRequest(ctx context.Context, statio
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-ui-password", station.UIPassword)
-	req.Header.Set(relayAIHubAccountHeader, station.ID)
+	req.Header.Set(relayAIHubAccountHeader, runtimeID)
 	client, err := newRelayControlClient()
 	if err != nil {
 		return err
@@ -1304,16 +1331,15 @@ func (s *RelayStationService) forward(ctx context.Context, account *Account, rou
 	}
 
 	if station.Type == RelayStationTypeAIHub {
-		activated, err := s.activateAIHubStation(ctx, station)
+		runtimeID := relayAIHubRuntimeID(station.ID, route.source.PolicyKey)
+		activated, err := s.activateAIHubStation(ctx, station, runtimeID)
 		if err != nil {
 			return nil, err
 		}
 		if activated {
-			if policy, ok := s.aiHubConfigForStation(station.ID); ok {
-				if err := s.postAIHubConfigRequest(ctx, station, policy); err != nil {
-					s.clearActiveAIHubStation(station.ID)
-					return nil, err
-				}
+			if err := s.postAIHubConfigRequest(ctx, station, relayAIHubPolicyForSource(route.source), runtimeID); err != nil {
+				s.clearActiveAIHubStation(runtimeID)
+				return nil, err
 			}
 		}
 		if token := strings.TrimSpace(station.ProxyToken); token != "" {
@@ -1322,8 +1348,9 @@ func (s *RelayStationService) forward(ctx context.Context, account *Account, rou
 		if maxRate := strings.TrimSpace(inbound.Header.Get(relayMaxRateHeader)); maxRate != "" {
 			outbound.Header.Set(relayMaxRateHeader, maxRate)
 		}
-		outbound.Header.Set(relayAIHubAccountHeader, station.ID)
+		outbound.Header.Set(relayAIHubAccountHeader, runtimeID)
 		outbound.Header.Set("X-Sub2api-Group", route.source.SourceGroup)
+		route.runtimeID = runtimeID
 		return newRelayProxyClient().Do(outbound)
 	}
 

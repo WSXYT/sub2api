@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -100,6 +101,7 @@ type RelayStationSource struct {
 	StationID    string          `json:"station_id"`
 	Enabled      bool            `json:"enabled"`
 	SourceGroup  string          `json:"source_group,omitempty"`
+	PolicyKey    string          `json:"policy_key,omitempty"`
 	Priority     int             `json:"priority"`
 	Delta        float64         `json:"delta"`
 	MaxRate      *float64        `json:"max_rate,omitempty"`
@@ -224,6 +226,7 @@ type relayRateCache struct {
 type RelayRateView struct {
 	StationID          string    `json:"station_id"`
 	StationName        string    `json:"station_name"`
+	GroupID            int64     `json:"group_id"`
 	SourceGroup        string    `json:"source_group"`
 	Status             string    `json:"status"`
 	Rate               *float64  `json:"rate"`
@@ -286,6 +289,7 @@ type RelayProfitEstimate struct {
 type relayRouteCacheEntry struct {
 	StationID   string
 	SourceGroup string
+	PolicyKey   string
 	ExpiresAt   time.Time
 	Revision    uint64
 }
@@ -295,6 +299,7 @@ type relayRouteCacheEntry struct {
 type RelayRoute struct {
 	station       relayStation
 	source        RelayStationSource
+	runtimeID     string
 	effectiveRate float64
 }
 
@@ -426,6 +431,7 @@ const (
 	relayStationIDKey     = "relay_station_id"
 	relayGroupIDKey       = "relay_group_id"
 	relaySourceGroupKey   = "relay_source_group"
+	relayPolicyKeyKey     = "relay_policy_key"
 
 	relaySourcePriorityLimit = 1_000_000
 	relayNativePriorityBase  = relaySourcePriorityLimit + 1
@@ -482,7 +488,7 @@ func (s *RelayStationService) SyncNativeRelayAccounts(ctx context.Context) error
 			if !ok {
 				continue
 			}
-			key := relayAccountKey(station.ID, binding.GroupID, source.SourceGroup)
+			key := relaySourceAccountKey(station.ID, binding.GroupID, source)
 			desired[key] = source.Enabled && station.Enabled
 		}
 	}
@@ -504,8 +510,16 @@ func (s *RelayStationService) SyncNativeRelayAccounts(ctx context.Context) error
 			if !ok {
 				continue
 			}
-			key := relayAccountKey(station.ID, binding.GroupID, source.SourceGroup)
+			key := relaySourceAccountKey(station.ID, binding.GroupID, source)
 			accounts := existingByKey[key]
+			if len(accounts) == 0 && source.PolicyKey != "" {
+				legacyKey := relayAccountKey(station.ID, binding.GroupID, source.SourceGroup)
+				accounts = existingByKey[legacyKey]
+				if len(accounts) > 0 {
+					desired[legacyKey] = true
+					delete(existingByKey, legacyKey)
+				}
+			}
 			if len(accounts) > 0 {
 				account := accounts[0]
 				account.Name = fmt.Sprintf("%s / %s", station.Name, source.SourceGroup)
@@ -521,6 +535,7 @@ func (s *RelayStationService) SyncNativeRelayAccounts(ctx context.Context) error
 				account.Extra[relayStationIDKey] = station.ID
 				account.Extra[relayGroupIDKey] = binding.GroupID
 				account.Extra[relaySourceGroupKey] = source.SourceGroup
+				account.Extra[relayPolicyKeyKey] = source.PolicyKey
 				if err := s.accountRepo.Update(ctx, &account); err != nil {
 					return err
 				}
@@ -539,7 +554,7 @@ func (s *RelayStationService) SyncNativeRelayAccounts(ctx context.Context) error
 				Platform:       platform,
 				Type:           accountType,
 				Credentials:    map[string]any{},
-				Extra:          map[string]any{relayAccountMarkerKey: true, relayAccountKeyKey: key, relayStationIDKey: station.ID, relayGroupIDKey: binding.GroupID, relaySourceGroupKey: source.SourceGroup},
+				Extra:          map[string]any{relayAccountMarkerKey: true, relayAccountKeyKey: key, relayStationIDKey: station.ID, relayGroupIDKey: binding.GroupID, relaySourceGroupKey: source.SourceGroup, relayPolicyKeyKey: source.PolicyKey},
 				Concurrency:    3,
 				Priority:       relayNativePriority(source.Priority),
 				Status:         StatusActive,
@@ -569,6 +584,14 @@ func (s *RelayStationService) SyncNativeRelayAccounts(ctx context.Context) error
 
 func relayAccountKey(stationID string, groupID int64, sourceGroup string) string {
 	return fmt.Sprintf("%s:%d:%s", stationID, groupID, sourceGroup)
+}
+
+func relaySourceAccountKey(stationID string, groupID int64, source RelayStationSource) string {
+	key := relayAccountKey(stationID, groupID, source.SourceGroup)
+	if source.PolicyKey != "" {
+		return key + ":" + source.PolicyKey
+	}
+	return key
 }
 
 func relayNativePriority(sourcePriority int) int {
@@ -920,7 +943,7 @@ func (s *RelayStationService) ListRelayAccounts(ctx context.Context) ([]RelayAcc
 			if !ok {
 				continue
 			}
-			rate := rateSnapshot.Rates[source.StationID][source.SourceGroup]
+			rate := rateSnapshot.Rates[source.StationID][relayRateKey(source)]
 			account := RelayAccountView{
 				StationID:          station.ID,
 				StationName:        station.Name,
@@ -1174,7 +1197,7 @@ func (s *RelayStationService) syncNativeRelayRates(ctx context.Context, snapshot
 			if !stationFound {
 				continue
 			}
-			key := relayAccountKey(source.StationID, binding.GroupID, source.SourceGroup)
+			key := relaySourceAccountKey(source.StationID, binding.GroupID, source)
 			accounts, err := s.accountRepo.FindByExtraField(ctx, relayAccountKeyKey, key)
 			if err != nil {
 				return err
@@ -1182,7 +1205,7 @@ func (s *RelayStationService) syncNativeRelayRates(ctx context.Context, snapshot
 			if len(accounts) == 0 {
 				continue
 			}
-			rate := rates.Rates[source.StationID][source.SourceGroup]
+			rate := rates.Rates[source.StationID][relayRateKey(source)]
 			updates := map[string]any{
 				"relay_rate_updated_at":        rate.UpdatedAt.Format(time.RFC3339Nano),
 				"relay_effective_rate":         nil,
@@ -1224,7 +1247,7 @@ func (s *RelayStationService) syncRelayGroupRateMultipliers(ctx context.Context,
 			if !found || !station.Enabled || !source.Enabled || (station.Type == RelayStationTypeAIHub && strings.TrimSpace(station.BaseURL) == "") {
 				continue
 			}
-			rate := rates.Rates[source.StationID][source.SourceGroup]
+			rate := rates.Rates[source.StationID][relayRateKey(source)]
 			if !rateReadyForRoute(rate, now) {
 				continue
 			}
@@ -1334,7 +1357,7 @@ func (s *RelayStationService) listRates(onlyStationID string) []RelayRateView {
 			if onlyStationID != "" && source.StationID != onlyStationID {
 				continue
 			}
-			key := source.StationID + "\x00" + source.SourceGroup
+			key := fmt.Sprintf("%d:%s:%s", binding.GroupID, source.StationID, relayRateKey(source))
 			if _, ok := seen[key]; ok {
 				continue
 			}
@@ -1343,10 +1366,11 @@ func (s *RelayStationService) listRates(onlyStationID string) []RelayRateView {
 			if !ok {
 				continue
 			}
-			rate := rateSnapshot.Rates[source.StationID][source.SourceGroup]
+			rate := rateSnapshot.Rates[source.StationID][relayRateKey(source)]
 			view := RelayRateView{
 				StationID:          station.ID,
 				StationName:        station.Name,
+				GroupID:            binding.GroupID,
 				SourceGroup:        source.SourceGroup,
 				Status:             rate.Status,
 				Rate:               cloneFloat64(rate.Rate),
@@ -1388,14 +1412,15 @@ func (s *RelayStationService) ResolveRouteForAccount(ctx context.Context, accoun
 	if !found {
 		return nil, ErrRelayRouteNotFound
 	}
+	policyKey := account.GetExtraString(relayPolicyKeyKey)
 	for _, source := range binding.Sources {
-		if source.StationID != station.ID || source.SourceGroup != account.RelaySourceGroup() || !source.Enabled || !station.Enabled {
+		if source.StationID != station.ID || source.SourceGroup != account.RelaySourceGroup() || source.PolicyKey != policyKey || !source.Enabled || !station.Enabled {
 			continue
 		}
-		rate := s.snapshotRates().Rates[station.ID][source.SourceGroup]
+		rate := s.snapshotRates().Rates[station.ID][relayRateKey(source)]
 		if !rateReadyForRoute(rate, time.Now()) {
 			_ = s.RefreshRates(ctx)
-			rate = s.snapshotRates().Rates[station.ID][source.SourceGroup]
+			rate = s.snapshotRates().Rates[station.ID][relayRateKey(source)]
 		}
 		if !rateReadyForRoute(rate, time.Now()) {
 			return nil, ErrRelayRateUnavailable
@@ -1405,7 +1430,7 @@ func (s *RelayStationService) ResolveRouteForAccount(ctx context.Context, accoun
 			return nil, ErrRelayRateUnavailable
 		}
 		account.setRelayEffectiveRate(effectiveRate, rate.UpdatedAt)
-		return &RelayRoute{station: station, source: source, effectiveRate: effectiveRate}, nil
+		return &RelayRoute{station: station, source: source, runtimeID: relayAIHubRuntimeID(station.ID, source.PolicyKey), effectiveRate: effectiveRate}, nil
 	}
 	return nil, ErrRelayRouteNotFound
 }
@@ -1453,7 +1478,7 @@ func (s *RelayStationService) ResolveRoute(ctx context.Context, groupID int64, a
 		if !ok || !station.Enabled || (station.Type == RelayStationTypeAIHub && strings.TrimSpace(station.BaseURL) == "") {
 			continue
 		}
-		rate := rateSnapshot.Rates[source.StationID][source.SourceGroup]
+		rate := rateSnapshot.Rates[source.StationID][relayRateKey(source)]
 		if !rateReadyForRoute(rate, now) {
 			continue
 		}
@@ -1461,7 +1486,7 @@ func (s *RelayStationService) ResolveRoute(ctx context.Context, groupID int64, a
 		if !ok {
 			continue
 		}
-		candidate := &RelayRoute{station: station, source: source, effectiveRate: effectiveRate}
+		candidate := &RelayRoute{station: station, source: source, runtimeID: relayAIHubRuntimeID(station.ID, source.PolicyKey), effectiveRate: effectiveRate}
 		if selected == nil || candidate.source.Priority > selected.source.Priority ||
 			(candidate.source.Priority == selected.source.Priority && (candidate.effectiveRate < selected.effectiveRate ||
 				(candidate.effectiveRate == selected.effectiveRate && candidate.station.ID < selected.station.ID))) {
@@ -1477,6 +1502,7 @@ func (s *RelayStationService) ResolveRoute(ctx context.Context, groupID int64, a
 		s.routes[cacheKey] = relayRouteCacheEntry{
 			StationID:   selected.station.ID,
 			SourceGroup: selected.source.SourceGroup,
+			PolicyKey:   selected.source.PolicyKey,
 			ExpiresAt:   time.Now().Add(relayStationRouteTTL),
 			Revision:    s.revision,
 		}
@@ -1544,7 +1570,7 @@ func (s *RelayStationService) EstimateProfit(ctx context.Context, start, end tim
 			stat := groupStat
 			actualCostAvailable := false
 			if relayAccountsByKey != nil {
-				if account, found := relayAccountsByKey[relayAccountKey(station.ID, binding.GroupID, source.SourceGroup)]; found {
+				if account, found := relayAccountsByKey[relaySourceAccountKey(station.ID, binding.GroupID, source)]; found {
 					stat = usagestats.GroupStat{GroupID: binding.GroupID}
 					accountStats, statsErr := s.usage.GetGroupStatsWithFilters(ctx, start, end, usagestats.UsageLogFilters{
 						AccountID:    account.ID,
@@ -1560,7 +1586,7 @@ func (s *RelayStationService) EstimateProfit(ctx context.Context, start, end tim
 					actualCostAvailable = true
 				}
 			}
-			rate := rateSnapshot.Rates[source.StationID][source.SourceGroup]
+			rate := rateSnapshot.Rates[source.StationID][relayRateKey(source)]
 			estimate := RelayProfitEstimate{
 				GroupID:        group.ID,
 				GroupName:      group.Name,
@@ -1624,14 +1650,14 @@ func (s *RelayStationService) cachedRoute(configSnapshot relayStationConfig, key
 		return nil
 	}
 	station, stationOK := findRelayStation(configSnapshot.Stations, entry.StationID)
-	source, sourceOK := findRelaySource(binding.Sources, entry.StationID, entry.SourceGroup)
+	source, sourceOK := findRelaySourcePolicy(binding.Sources, entry.StationID, entry.SourceGroup, entry.PolicyKey)
 	if !stationOK || !sourceOK || !station.Enabled || !source.Enabled {
 		return nil
 	}
 	if station.Type == RelayStationTypeAIHub && strings.TrimSpace(station.BaseURL) == "" {
 		return nil
 	}
-	rate := s.snapshotRates().Rates[station.ID][source.SourceGroup]
+	rate := s.snapshotRates().Rates[station.ID][relayRateKey(source)]
 	now := time.Now()
 	if !rateReadyForRoute(rate, now) {
 		return nil
@@ -1640,14 +1666,14 @@ func (s *RelayStationService) cachedRoute(configSnapshot relayStationConfig, key
 	if !ok {
 		return nil
 	}
-	return &RelayRoute{station: station, source: source, effectiveRate: effectiveRate}
+	return &RelayRoute{station: station, source: source, runtimeID: relayAIHubRuntimeID(station.ID, source.PolicyKey), effectiveRate: effectiveRate}
 }
 
 func (s *RelayStationService) hasReadyRate(binding RelayGroupBinding, now time.Time) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, source := range binding.Sources {
-		if source.Enabled && rateReadyForRoute(s.rates.Rates[source.StationID][source.SourceGroup], now) {
+		if source.Enabled && rateReadyForRoute(s.rates.Rates[source.StationID][relayRateKey(source)], now) {
 			return true
 		}
 	}
@@ -1728,7 +1754,6 @@ func (s *RelayStationService) validateConfig(candidate *relayStationConfig) erro
 	}
 
 	bindingIDs := make(map[int64]struct{}, len(candidate.Bindings))
-	aihubPolicies := make(map[string]relayAIHubConfig)
 	filteredBindings := make([]RelayGroupBinding, 0, len(candidate.Bindings))
 	for index := range candidate.Bindings {
 		binding := candidate.Bindings[index]
@@ -1794,14 +1819,12 @@ func (s *RelayStationService) validateConfig(candidate *relayStationConfig) erro
 					return infraerrors.BadRequest("RELAY_MODE_INVALID", "aihub relay mode must be economy, balanced, or speed")
 				}
 			}
-			if station.Type == RelayStationTypeAIHub && source.Enabled {
-				policy := relayAIHubPolicyForSource(*source)
-				if existing, found := aihubPolicies[source.StationID]; found && !sameRelayAIHubConfig(existing, policy) {
-					return infraerrors.BadRequest("RELAY_AIHUB_POLICY_CONFLICT", "all bindings for an aihub account must use the same aihub-auto policy")
-				}
-				aihubPolicies[source.StationID] = policy
+			if station.Type == RelayStationTypeAIHub {
+				source.PolicyKey = relayAIHubPolicyKey(relayAIHubPolicyForSource(*source))
+			} else {
+				source.PolicyKey = ""
 			}
-			sourceKey := source.StationID + "\x00" + source.SourceGroup
+			sourceKey := source.StationID + "\x00" + relayRateKey(*source)
 			if _, exists := sourceIDs[sourceKey]; exists {
 				return infraerrors.BadRequest("RELAY_SOURCE_DUPLICATE", "relay source may be bound once per station and source group")
 			}
@@ -1883,12 +1906,24 @@ func relayAIHubPolicyForSource(source RelayStationSource) relayAIHubConfig {
 	}
 }
 
-func sameRelayAIHubConfig(left, right relayAIHubConfig) bool {
-	if left.Mode != right.Mode || !sameRelayStringSlice(left.AccountPoolPlans, right.AccountPoolPlans) {
-		return false
+func relayAIHubPolicyKey(policy relayAIHubConfig) string {
+	encoded, _ := json.Marshal(policy)
+	sum := sha256.Sum256(encoded)
+	return fmt.Sprintf("p-%x", sum[:8])
+}
+
+func relayAIHubRuntimeID(stationID, policyKey string) string {
+	if policyKey == "" || policyKey == "default" {
+		return stationID
 	}
-	return sameRelayFloat64(left.PriceBand, right.PriceBand, func(band *RelayPriceBand) *float64 { return band.Min }) &&
-		sameRelayFloat64(left.PriceBand, right.PriceBand, func(band *RelayPriceBand) *float64 { return band.Max })
+	return stationID + ":" + policyKey
+}
+
+func relayRateKey(source RelayStationSource) string {
+	if source.PolicyKey != "" {
+		return source.PolicyKey
+	}
+	return source.SourceGroup
 }
 
 func normalizeRelayAccountPools(values []string) ([]string, error) {
@@ -1925,17 +1960,6 @@ func sameRelayStringSlice(left, right []string) bool {
 	return true
 }
 
-func sameRelayFloat64(left, right *RelayPriceBand, value func(*RelayPriceBand) *float64) bool {
-	if left == nil || right == nil {
-		return left == nil && right == nil
-	}
-	leftValue, rightValue := value(left), value(right)
-	if leftValue == nil || rightValue == nil {
-		return leftValue == nil && rightValue == nil
-	}
-	return *leftValue == *rightValue
-}
-
 func relayRequiredSourceGroups(config relayStationConfig, onlyStationID string) map[string]map[string]struct{} {
 	result := make(map[string]map[string]struct{})
 	stationByID := relayStationMap(config.Stations)
@@ -1951,7 +1975,7 @@ func relayRequiredSourceGroups(config relayStationConfig, onlyStationID string) 
 			if result[source.StationID] == nil {
 				result[source.StationID] = make(map[string]struct{})
 			}
-			result[source.StationID][source.SourceGroup] = struct{}{}
+			result[source.StationID][relayRateKey(source)] = struct{}{}
 		}
 	}
 	return result
@@ -1992,9 +2016,9 @@ func findRelayBinding(bindings []RelayGroupBinding, groupID int64) (RelayGroupBi
 	return RelayGroupBinding{}, false
 }
 
-func findRelaySource(sources []RelayStationSource, stationID, sourceGroup string) (RelayStationSource, bool) {
+func findRelaySourcePolicy(sources []RelayStationSource, stationID, sourceGroup, policyKey string) (RelayStationSource, bool) {
 	for _, source := range sources {
-		if source.StationID == stationID && source.SourceGroup == sourceGroup {
+		if source.StationID == stationID && source.SourceGroup == sourceGroup && source.PolicyKey == policyKey {
 			return source, true
 		}
 	}

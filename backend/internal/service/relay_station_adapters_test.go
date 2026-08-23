@@ -701,6 +701,25 @@ func TestValidateConfigAllowsMultipleManagedAIHubStations(t *testing.T) {
 	}
 }
 
+func TestValidateConfigAllowsDifferentPoliciesPerAIHubBinding(t *testing.T) {
+	min := 0.01
+	max := 0.09
+	candidate := relayStationConfig{
+		Stations: []relayStation{{ID: "aihub", Type: RelayStationTypeAIHub, Name: "AIHub", BaseURL: managedAIHubRouterURL, Username: "user@example.com"}},
+		Bindings: []RelayGroupBinding{
+			{GroupID: 1, Sources: []RelayStationSource{{StationID: "aihub", Enabled: true, Mode: "economy", PriceBand: &RelayPriceBand{Min: &min, Max: &max}}}},
+			{GroupID: 2, Sources: []RelayStationSource{{StationID: "aihub", Enabled: true, Mode: "speed"}}},
+		},
+	}
+	service := &RelayStationService{}
+	if err := service.validateConfig(&candidate); err != nil {
+		t.Fatalf("different AIHub binding policies were rejected: %v", err)
+	}
+	if candidate.Bindings[0].Sources[0].PolicyKey == candidate.Bindings[1].Sources[0].PolicyKey {
+		t.Fatal("different AIHub policies received the same runtime policy key")
+	}
+}
+
 func TestAIHubConfigForStationUsesEmptyPoolListForNoFilter(t *testing.T) {
 	localMax := 0.4
 	service := &RelayStationService{config: relayStationConfig{Bindings: []RelayGroupBinding{{
