@@ -34,6 +34,7 @@ const (
 type relayStationSession struct {
 	client      *http.Client
 	token       string
+	userID      string
 	expiresAt   time.Time
 	keysMu      sync.Mutex
 	proxyTokens map[string]string
@@ -435,9 +436,7 @@ func (s *RelayStationService) requestNewAPIRates(ctx context.Context, station re
 	if err != nil {
 		return nil, 0, err
 	}
-	if session.token != "" {
-		req.Header.Set("Authorization", "Bearer "+session.token)
-	}
+	setNewAPIAuth(req, session)
 	resp, err := session.client.Do(req)
 	if err != nil {
 		return nil, 0, fmt.Errorf("request newapi pricing: %w", err)
@@ -613,6 +612,7 @@ func loginNewAPIStation(ctx context.Context, service *RelayStationService, stati
 	var payload struct {
 		Success *bool `json:"success"`
 		Data    struct {
+			ID          int64  `json:"id"`
 			AccessToken string `json:"access_token"`
 		} `json:"data"`
 	}
@@ -625,9 +625,22 @@ func loginNewAPIStation(ctx context.Context, service *RelayStationService, stati
 	return &relayStationSession{
 		client:      client,
 		token:       strings.TrimSpace(payload.Data.AccessToken),
+		userID:      strconv.FormatInt(payload.Data.ID, 10),
 		expiresAt:   time.Now().Add(10 * time.Minute),
 		proxyTokens: make(map[string]string),
 	}, nil
+}
+
+func setNewAPIAuth(req *http.Request, session *relayStationSession) {
+	if session == nil {
+		return
+	}
+	if session.token != "" {
+		req.Header.Set("Authorization", "Bearer "+session.token)
+	}
+	if session.userID != "" && session.userID != "0" {
+		req.Header.Set("New-Api-User", session.userID)
+	}
 }
 
 func loginSub2APIStation(ctx context.Context, service *RelayStationService, station relayStation) (*relayStationSession, error) {
@@ -830,9 +843,7 @@ func (s *RelayStationService) requestNewAPIProxyToken(ctx context.Context, stati
 	if err != nil {
 		return "", err
 	}
-	if session.token != "" {
-		req.Header.Set("Authorization", "Bearer "+session.token)
-	}
+	setNewAPIAuth(req, session)
 	resp, err := session.client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("list newapi tokens: %w", err)
@@ -880,9 +891,7 @@ func (s *RelayStationService) requestNewAPIProxyToken(ctx context.Context, stati
 		if err != nil {
 			return "", err
 		}
-		if session.token != "" {
-			keyReq.Header.Set("Authorization", "Bearer "+session.token)
-		}
+		setNewAPIAuth(keyReq, session)
 		keyResp, err := session.client.Do(keyReq)
 		if err != nil {
 			return "", fmt.Errorf("get newapi token key: %w", err)

@@ -578,8 +578,11 @@ func TestListGroupsUsesStationRateSources(t *testing.T) {
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
 				case "/api/user/login":
-					_, _ = w.Write([]byte(`{"success":true,"data":{"access_token":"dashboard"}}`))
+					_, _ = w.Write([]byte(`{"success":true,"data":{"id":6015,"access_token":"dashboard"}}`))
 				case "/api/pricing", "/api/v1/groups/available":
+					if test.stationType == RelayStationTypeNewAPI && r.Header.Get("New-Api-User") != "6015" {
+						t.Errorf("newapi user header = %q, want 6015", r.Header.Get("New-Api-User"))
+					}
 					_, _ = w.Write([]byte(test.groupsBody))
 				case "/api/v1/auth/login":
 					_, _ = w.Write([]byte(`{"code":0,"data":{"access_token":"dashboard"}}`))
