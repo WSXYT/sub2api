@@ -1014,6 +1014,8 @@ func filterSchedulerExtra(extra map[string]any) map[string]any {
 		"auto_pause_5h_disabled",
 		"auto_pause_7d_disabled",
 		"model_rate_limits",
+		"relay_effective_rate",
+		"relay_rate_updated_at",
 		service.UpstreamBillingProbeExtraKey,
 		service.GrokMediaEligibleExtraKey,
 		"grok_billing_snapshot",
