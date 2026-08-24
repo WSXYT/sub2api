@@ -332,12 +332,37 @@ func (s *SchedulerSnapshotService) runInitialRebuild() {
 	_ = s.coalesceFullRebuild(func() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
+		if err := s.reconcileOutboxWatermarkBeforeRebuild(ctx); err != nil {
+			logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] outbox watermark reconcile failed: %v", err)
+		}
 		if err := s.rebuildFullSnapshot(ctx, "startup"); err != nil {
 			logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] rebuild startup failed: %v", err)
 			return err
 		}
 		return nil
 	})
+}
+
+func (s *SchedulerSnapshotService) reconcileOutboxWatermarkBeforeRebuild(ctx context.Context) error {
+	if s == nil || s.cache == nil || s.outboxRepo == nil {
+		return nil
+	}
+	watermark, err := s.cache.GetOutboxWatermark(ctx)
+	if err != nil {
+		return err
+	}
+	maxID, err := s.outboxRepo.MaxID(ctx)
+	if err != nil {
+		return err
+	}
+	if watermark <= maxID {
+		return nil
+	}
+	if err := s.cache.SetOutboxWatermark(ctx, 0); err != nil {
+		return err
+	}
+	logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] reset outbox watermark before rebuild: from=%d db_max=%d", watermark, maxID)
+	return nil
 }
 
 func (s *SchedulerSnapshotService) runOutboxWorker(interval time.Duration) {

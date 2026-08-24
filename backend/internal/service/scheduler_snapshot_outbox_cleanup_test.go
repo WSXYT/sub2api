@@ -253,6 +253,40 @@ func TestSchedulerSnapshotServicePollOutboxCleansConsumedRowsAfterWatermark(t *t
 	}
 }
 
+func TestSchedulerSnapshotServiceReconcilesWatermarkBeforeDatabaseRestoreRebuild(t *testing.T) {
+	t.Run("reset watermark so restored events replay", func(t *testing.T) {
+		cache := &outboxCleanupCache{watermark: 25}
+		repo := &outboxCleanupRepo{rows: []int64{2, 9}}
+		svc := NewSchedulerSnapshotService(cache, repo, nil, nil, nil)
+
+		if err := svc.reconcileOutboxWatermarkBeforeRebuild(context.Background()); err != nil {
+			t.Fatalf("reconcile watermark: %v", err)
+		}
+		if cache.watermark != 0 {
+			t.Fatalf("expected watermark 0, got %d", cache.watermark)
+		}
+		if !reflect.DeepEqual(cache.setWatermarks, []int64{0}) {
+			t.Fatalf("unexpected watermark writes: %#v", cache.setWatermarks)
+		}
+		if repo.maxIDCalls != 1 {
+			t.Fatalf("expected one MaxID call, got %d", repo.maxIDCalls)
+		}
+	})
+
+	t.Run("keep watermark when database has caught up", func(t *testing.T) {
+		cache := &outboxCleanupCache{watermark: 9}
+		repo := &outboxCleanupRepo{rows: []int64{2, 9, 10}}
+		svc := NewSchedulerSnapshotService(cache, repo, nil, nil, nil)
+
+		if err := svc.reconcileOutboxWatermarkBeforeRebuild(context.Background()); err != nil {
+			t.Fatalf("reconcile watermark: %v", err)
+		}
+		if cache.watermark != 9 || len(cache.setWatermarks) != 0 {
+			t.Fatalf("unexpected watermark change: value=%d writes=%#v", cache.watermark, cache.setWatermarks)
+		}
+	})
+}
+
 func TestSchedulerSnapshotServicePollOutboxSkipsCleanupWhenLockUnavailable(t *testing.T) {
 	cache := &outboxCleanupCache{}
 	repo := &outboxCleanupRepo{

@@ -112,11 +112,11 @@ func (r *schedulerOutboxRepository) FirstCreatedAtAfter(ctx context.Context, aft
 }
 
 func (r *schedulerOutboxRepository) MaxID(ctx context.Context) (int64, error) {
-	var maxID int64
-	if err := r.db.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) FROM scheduler_outbox").Scan(&maxID); err != nil {
+	var lastID int64
+	if err := r.db.QueryRowContext(ctx, "SELECT last_value FROM scheduler_outbox_id_seq").Scan(&lastID); err != nil {
 		return 0, err
 	}
-	return maxID, nil
+	return lastID, nil
 }
 
 func (r *schedulerOutboxRepository) DeleteConsumedUpTo(ctx context.Context, watermark int64, limit int) (int64, error) {
