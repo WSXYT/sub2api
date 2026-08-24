@@ -1187,6 +1187,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 	}
 	baseCandidateCount := 0
 	filterStats := openAISelectionFilterStats{pool: len(accounts)}
+	exclusionReasons := make(map[int64]string)
 	candidates := make([]*Account, 0, len(accounts))
 	for i := range accounts {
 		acc := &accounts[i]
@@ -1198,7 +1199,34 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 		// re-check schedulability here so recently rate-limited/overloaded accounts
 		// are not selected again before the bucket is rebuilt.
 		if !isOpenAICompatibleAccountEligibleForRequest(ctx, acc, platform, requestedModel, false, requiredCapability) {
-			filterStats.exclude("ineligible")
+			reason := "ineligible"
+			switch {
+			case acc.Platform != platform || !acc.IsOpenAICompatible():
+				reason = "platform_mismatch"
+			case !acc.IsSchedulable():
+				reason = "not_schedulable"
+			case acc.isModelRateLimitedWithContext(ctx, requestedModel):
+				reason = "model_rate_limited"
+			default:
+				if acc.IsRelay() {
+					if _, hasRate := acc.RelayEffectiveRate(); !hasRate {
+						reason = "relay_rate_unavailable"
+					}
+				}
+				if reason == "ineligible" && acc.IsOpenAI() {
+					if paused, decision := shouldAutoPauseOpenAIAccountByQuota(ctx, acc); paused {
+						reason = "quota_auto_pause_" + decision.window
+					}
+				}
+				if reason == "ineligible" && requestedModel != "" && !acc.IsModelSupported(requestedModel) {
+					reason = "model_not_supported"
+				}
+				if reason == "ineligible" && !acc.SupportsOpenAIEndpointCapability(requiredCapability) {
+					reason = "capability_mismatch"
+				}
+			}
+			filterStats.exclude(reason)
+			exclusionReasons[acc.ID] = reason
 			continue
 		}
 		if !parentHealthyForShadow(acc, parentLookupL2) {
@@ -1223,6 +1251,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 			"platform", platform,
 			"model", requestedModel,
 			"details", filterStats.summary("legacy_candidate_filter"),
+			"account_exclusion_reasons", exclusionReasons,
 		)
 		return nil, ErrNoAvailableAccounts
 	}
