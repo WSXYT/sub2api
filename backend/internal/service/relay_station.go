@@ -1254,11 +1254,11 @@ func (s *RelayStationService) refreshRatesWithStationTimeout(ctx context.Context
 		}(stationID, station, sourceGroups)
 	}
 
-	updates := make(map[string]map[string]RelayStationRate, pollCount)
+	updates := make(map[string]stationPollResult, pollCount)
 	var pollErrors []error
 	for range pollCount {
 		result := <-results
-		updates[result.stationID] = result.rates
+		updates[result.stationID] = result
 		if result.err != nil {
 			pollErrors = append(pollErrors, fmt.Errorf("%s: %w", result.stationName, result.err))
 		}
@@ -1276,12 +1276,20 @@ func (s *RelayStationService) refreshRatesWithStationTimeout(ctx context.Context
 	if candidateRates.Rates == nil {
 		candidateRates.Rates = make(map[string]map[string]RelayStationRate)
 	}
-	for stationID, rates := range updates {
+	now := time.Now().UTC()
+	for stationID, result := range updates {
 		if candidateRates.Rates[stationID] == nil {
 			candidateRates.Rates[stationID] = make(map[string]RelayStationRate)
 		}
-		for sourceGroup, rate := range rates {
-			if current := candidateRates.Rates[stationID][sourceGroup]; current.UpdatedAt.After(rate.UpdatedAt) {
+		for sourceGroup, rate := range result.rates {
+			current := candidateRates.Rates[stationID][sourceGroup]
+			// A transient poll failure must not erase a still-fresh ready price.
+			// Once that snapshot ages past the normal freshness window, the
+			// unavailable result below is published and routing fails closed.
+			if result.err != nil && rate.Status == RelayRateStatusUnavailable && rateReadyForRoute(current, now) {
+				continue
+			}
+			if current.UpdatedAt.After(rate.UpdatedAt) {
 				continue
 			}
 			candidateRates.Rates[stationID][sourceGroup] = rate

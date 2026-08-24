@@ -1404,10 +1404,15 @@ func TestBackgroundRateRefreshIsolatesStationTimeouts(t *testing.T) {
 	}))
 	defer fast.Close()
 
+	previousRate := 0.07
+	previousUpdatedAt := time.Now().UTC()
 	service := &RelayStationService{
 		settingRepo: &relayCredentialSettingRepo{},
 		sessions:    make(map[string]*relayStationSession),
 		loaded:      true,
+		rates: relayRateCache{Rates: map[string]map[string]RelayStationRate{
+			"slow": {"vip": {Rate: &previousRate, Status: RelayRateStatusReady, UpdatedAt: previousUpdatedAt}},
+		}},
 		config: relayStationConfig{
 			Stations: []relayStation{
 				{ID: "slow", Type: RelayStationTypeNewAPI, Name: "Slow", BaseURL: slow.URL, ControlURL: slow.URL, Username: "admin", Password: "password", Enabled: true},
@@ -1443,5 +1448,9 @@ func TestBackgroundRateRefreshIsolatesStationTimeouts(t *testing.T) {
 	rate := service.snapshotRates().Rates["fast"]["vip"]
 	if rate.Status != RelayRateStatusReady || rate.Rate == nil || *rate.Rate != 0.08 {
 		t.Fatalf("fast station rate = %#v, want ready 0.08 after slow station timeout", rate)
+	}
+	slowRate := service.snapshotRates().Rates["slow"]["vip"]
+	if slowRate.Status != RelayRateStatusReady || slowRate.Rate == nil || *slowRate.Rate != previousRate || !slowRate.UpdatedAt.Equal(previousUpdatedAt) {
+		t.Fatalf("slow station rate = %#v, want the still-fresh previous rate after timeout", slowRate)
 	}
 }
