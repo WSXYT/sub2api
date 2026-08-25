@@ -94,6 +94,27 @@ export interface RelayStationGroup {
 	name: string;
 }
 
+export function relayStationHasAvailableSource(
+	station: RelayStation,
+	groups: RelayStationGroup[],
+	selectedSources: RelayStationSource[],
+): boolean {
+	if (station.type === "aihub") {
+		return !selectedSources.some((source) => source.station_id === station.id);
+	}
+	return (
+		groups.length === 0 ||
+		groups.some(
+			(group) =>
+				!selectedSources.some(
+					(source) =>
+						source.station_id === station.id &&
+						source.source_group === group.name,
+				),
+		)
+	);
+}
+
 export interface RelayRate {
 	station_id: string;
 	station_name: string;

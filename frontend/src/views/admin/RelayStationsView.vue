@@ -95,6 +95,19 @@
                   :placeholder="t('admin.relayStations.binding.selectStationGroup')"
                   :aria-label="t('admin.relayStations.binding.selectStationGroup')"
                 />
+                <div
+                  v-if="stationGroupLoadErrors[stationToAdd]"
+                  class="mt-1.5 flex items-center gap-2 text-xs text-red-600 dark:text-red-400"
+                >
+                  <span>{{ t('admin.relayStations.binding.groupLoadFailed') }}</span>
+                  <button
+                    type="button"
+                    class="font-medium underline"
+                    @click="retryStationGroups(stationToAdd)"
+                  >
+                    {{ t('admin.relayStations.binding.retryGroups') }}
+                  </button>
+                </div>
               </div>
               <button
                 type="button"
@@ -786,6 +799,7 @@ import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
 import {
   effectiveRelayRate,
+  relayStationHasAvailableSource,
   relayProfitRange,
   relayErrorReason,
   type RelayGroupBinding,
@@ -846,6 +860,7 @@ const groups = ref<AdminGroup[]>([])
 const bindings = ref<RelayGroupBinding[]>([])
 const rates = ref<RelayRate[]>([])
 const stationGroups = ref<Record<string, RelayStationGroup[]>>({})
+const stationGroupLoadErrors = ref<Record<string, boolean>>({})
 const selectedGroupId = ref<number | null>(null)
 const stationToAdd = ref<string | null>(null)
 const sourceGroupToAdd = ref<string | null>(null)
@@ -966,11 +981,11 @@ const sourceGroupOptions = computed(() => {
 
 const availableStationOptions = computed(() =>
   stations.value
-    .filter((station) => station.type === 'aihub'
-      ? !selectedSources.value.some((source) => source.station_id === station.id)
-      : (stationGroups.value[station.id] || []).some((group) =>
-        !selectedSources.value.some((source) => source.station_id === station.id && source.source_group === group.name)
-      ))
+    .filter((station) => relayStationHasAvailableSource(
+      station,
+      stationGroups.value[station.id] || [],
+      selectedSources.value
+    ))
     .map((station) => ({
       value: station.id,
       label: `${station.name} (${stationTypeLabel(station.type)})`
@@ -1210,20 +1225,27 @@ function updateSourcePriority(source: RelayStationSource, event: Event): void {
   bindingsDirty.value = true
 }
 
+async function loadStationGroup(station: RelayStation): Promise<void> {
+  try {
+    const result = await adminAPI.relayStations.listGroups(station.id)
+    stationGroups.value = { ...stationGroups.value, [station.id]: result.groups }
+    const remainingErrors = { ...stationGroupLoadErrors.value }
+    delete remainingErrors[station.id]
+    stationGroupLoadErrors.value = remainingErrors
+  } catch {
+    stationGroupLoadErrors.value = { ...stationGroupLoadErrors.value, [station.id]: true }
+  }
+}
+
 async function loadStationGroups(nextStations: RelayStation[]): Promise<void> {
-  const results = await Promise.all(
-    nextStations
-      .filter((station) => station.type !== 'aihub')
-      .map(async (station) => {
-        try {
-          const result = await adminAPI.relayStations.listGroups(station.id)
-          return [station.id, result.groups] as const
-        } catch {
-          return [station.id, []] as const
-        }
-      })
-  )
-  stationGroups.value = Object.fromEntries(results)
+  await Promise.all(nextStations
+    .filter((station) => station.type !== 'aihub')
+    .map(loadStationGroup))
+}
+
+async function retryStationGroups(stationId: string): Promise<void> {
+  const station = stationById(stationId)
+  if (station) await loadStationGroup(station)
 }
 
 async function loadAll(): Promise<void> {

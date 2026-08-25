@@ -11,6 +11,7 @@ vi.mock("@/api/client", () => ({ apiClient: { get, patch, put } }));
 import {
 	effectiveRelayRate,
 	listRelayAccounts,
+	relayStationHasAvailableSource,
 	relayProfitRange,
 	relayErrorReason,
 	updateRelayAccount,
@@ -138,6 +139,38 @@ describe("admin relay stations API", () => {
 		expect(
 			effectiveRelayRate({ ...readyRate, rate: 0.09 }, 0.02, 0.1, false),
 		).toBeCloseTo(0.09);
+	});
+
+	it("keeps a NewAPI station selectable when its groups are unavailable", () => {
+		const station = {
+			id: "newapi-1",
+			type: "newapi" as const,
+			name: "NewAPI",
+			base_url: "https://relay.example.com",
+			control_url: "https://relay.example.com",
+			enabled: true,
+			credentials: {
+				ui_password: false,
+				proxy_token: false,
+				username: true,
+				password: true,
+			},
+			created_at: "",
+			updated_at: "",
+		};
+
+		expect(relayStationHasAvailableSource(station, [], [])).toBe(true);
+		expect(
+			relayStationHasAvailableSource(station, [{ name: "vip" }], [
+				{
+					station_id: station.id,
+					enabled: true,
+					source_group: "vip",
+					priority: 1,
+					delta: 0,
+				},
+			]),
+		).toBe(false);
 	});
 
 	it("uses the next midnight as the exclusive profit end", () => {
