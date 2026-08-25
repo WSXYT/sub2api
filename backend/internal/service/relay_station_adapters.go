@@ -1522,6 +1522,7 @@ func (s *RelayStationService) forward(ctx context.Context, account *Account, rou
 		outbound.Header.Set(relayAIHubAccountHeader, runtimeID)
 		outbound.Header.Set("X-Sub2api-Group", route.source.SourceGroup)
 		route.runtimeID = runtimeID
+		// #nosec G704 -- target passed validateRelayTargetURL before request construction.
 		return newRelayProxyClient().Do(outbound)
 	}
 
@@ -1536,6 +1537,7 @@ func (s *RelayStationService) forward(ctx context.Context, account *Account, rou
 		return nil, infraerrors.New(http.StatusBadGateway, "RELAY_PROXY_TOKEN_REQUIRED", "relay station has no usable API key")
 	}
 	outbound.Header.Set("Authorization", "Bearer "+proxyToken)
+	// #nosec G704 -- target passed validateRelayTargetURL before request construction.
 	return newRelayProxyClient().Do(outbound)
 }
 
