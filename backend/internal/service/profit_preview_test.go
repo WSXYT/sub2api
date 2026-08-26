@@ -119,7 +119,7 @@ func TestPreviewProfitAdmissionAssumeEnabled(t *testing.T) {
 		"账号倍率 0.9 > 阈值 0.5，探测快照的低倍率不能替代账号倍率")
 }
 
-func TestPreviewProfitAdmissionUsesRelayEffectiveRate(t *testing.T) {
+func TestPreviewProfitAdmissionUsesRelayUpstreamRate(t *testing.T) {
 	manualRate := 0.9
 	relay := &Account{
 		ID:             52,
@@ -129,7 +129,8 @@ func TestPreviewProfitAdmissionUsesRelayEffectiveRate(t *testing.T) {
 		RateMultiplier: &manualRate,
 		Extra: map[string]any{
 			relayAccountMarkerKey:   true,
-			"relay_effective_rate":  0.2,
+			"relay_effective_rate":  0.7,
+			"relay_upstream_rate":   0.2,
 			"relay_rate_updated_at": time.Now().Format(time.RFC3339Nano),
 		},
 	}

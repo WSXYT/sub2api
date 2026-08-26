@@ -1271,9 +1271,11 @@ func (s *RelayStationService) ForwardAccount(ctx context.Context, account *Accou
 				logger.L().Warn("managed AIHub selected rate is not routeable", zap.String("station_id", relayRouteStationID(route)))
 				return nil, relayUpstreamFailure(0)
 			}
-			response.Header.Set("x-aihub-auto-rate", strconv.FormatFloat(effectiveRate, 'g', -1, 64))
+			response.Header.Set("x-aihub-auto-rate", strconv.FormatFloat(*rawRate, 'g', -1, 64))
 			if account != nil {
-				account.setRelayEffectiveRate(effectiveRate, time.Now())
+				updatedAt := time.Now()
+				account.setRelayEffectiveRate(effectiveRate, updatedAt)
+				account.setRelayUpstreamRate(*rawRate, updatedAt)
 			}
 		} else {
 			response.Header.Del("x-aihub-auto-rate")

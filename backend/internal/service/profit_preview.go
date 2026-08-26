@@ -165,9 +165,9 @@ func previewAccountProfitAdmission(
 	}
 	rateMultiplier := account.RateMultiplier
 	if account.IsRelay() {
-		effectiveRate, ok := account.RelayEffectiveRate()
+		upstreamRate, ok := account.RelayCostRate()
 		if ok {
-			rateMultiplier = &effectiveRate
+			rateMultiplier = &upstreamRate
 		} else {
 			rateMultiplier = nil
 		}

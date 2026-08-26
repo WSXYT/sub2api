@@ -305,6 +305,7 @@ func TestBuildSchedulerMetadataAccount_KeepsRelayRateFields(t *testing.T) {
 		Type:     service.AccountTypeRelay,
 		Extra: map[string]any{
 			"relay_effective_rate":  0.068,
+			"relay_upstream_rate":   0.063,
 			"relay_rate_updated_at": "2026-08-24T08:28:06Z",
 			"unused_large_field":    "drop-me",
 		},
@@ -313,6 +314,7 @@ func TestBuildSchedulerMetadataAccount_KeepsRelayRateFields(t *testing.T) {
 	got := buildSchedulerMetadataAccount(account)
 
 	require.Equal(t, 0.068, got.Extra["relay_effective_rate"])
+	require.Equal(t, 0.063, got.Extra["relay_upstream_rate"])
 	require.Equal(t, "2026-08-24T08:28:06Z", got.Extra["relay_rate_updated_at"])
 	require.Nil(t, got.Extra["unused_large_field"])
 }

@@ -1343,6 +1343,7 @@ func (s *RelayStationService) syncNativeRelayRatesLocked(ctx context.Context, sn
 			updates := map[string]any{
 				"relay_rate_updated_at":        rate.UpdatedAt.Format(time.RFC3339Nano),
 				"relay_effective_rate":         nil,
+				"relay_upstream_rate":          nil,
 				"relay_suggested_group_id":     rate.SuggestedGroupID,
 				"relay_suggested_group_code":   rate.SuggestedGroupCode,
 				"relay_suggested_rate":         rate.SuggestedRate,
@@ -1353,6 +1354,7 @@ func (s *RelayStationService) syncNativeRelayRatesLocked(ctx context.Context, sn
 			if rateReadyForRoute(rate, time.Now()) {
 				if effective, ok := relayEffectiveRate(rate, source); ok {
 					updates["relay_effective_rate"] = effective
+					updates["relay_upstream_rate"] = *rate.Rate
 				}
 			}
 			for _, account := range accounts {
@@ -1564,6 +1566,7 @@ func (s *RelayStationService) ResolveRouteForAccount(ctx context.Context, accoun
 			return nil, ErrRelayRateUnavailable
 		}
 		account.setRelayEffectiveRate(effectiveRate, rate.UpdatedAt)
+		account.setRelayUpstreamRate(*rate.Rate, rate.UpdatedAt)
 		return &RelayRoute{station: station, source: source, runtimeID: relayAIHubRuntimeID(station.ID, source.PolicyKey), effectiveRate: effectiveRate}, nil
 	}
 	return nil, ErrRelayRouteNotFound
@@ -1733,7 +1736,8 @@ func (s *RelayStationService) EstimateProfit(ctx context.Context, start, end tim
 				DownstreamRate: group.RateMultiplier,
 			}
 			revenue := stat.Cost * group.RateMultiplier
-			if upstreamRate, routeable := relayEffectiveRate(rate, source); routeable {
+			if _, routeable := relayEffectiveRate(rate, source); routeable {
+				upstreamRate := *rate.Rate
 				cost := stat.Cost * upstreamRate
 				profit := revenue - cost
 				estimate.UpstreamRate = &upstreamRate

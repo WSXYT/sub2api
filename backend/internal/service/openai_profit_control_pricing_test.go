@@ -164,13 +164,14 @@ func TestProfitControl_AccountRateSemantics(t *testing.T) {
 		RateMultiplier: &relayRate,
 		Extra: map[string]any{
 			relayAccountMarkerKey:   true,
-			"relay_effective_rate":  0.2,
+			"relay_effective_rate":  0.8,
+			"relay_upstream_rate":   0.2,
 			"relay_rate_updated_at": now.Format(time.RFC3339Nano),
 		},
 	}
 	vetoed, _ = openAIProfitControlVetoReason(gateCtx, relay)
-	require.False(t, vetoed, "relay profit control must use the refreshed effective rate")
-	relay.Extra["relay_effective_rate"] = 0.8
+	require.False(t, vetoed, "relay profit control must use the raw upstream rate")
+	relay.Extra["relay_upstream_rate"] = 0.8
 	vetoed, reason = openAIProfitControlVetoReason(gateCtx, relay)
 	require.True(t, vetoed)
 	require.Equal(t, openAIProfitFilterReasonThreshold, reason)

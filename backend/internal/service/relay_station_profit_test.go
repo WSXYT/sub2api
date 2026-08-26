@@ -36,7 +36,7 @@ func TestEstimateProfitExcludesAdminUsage(t *testing.T) {
 	service.config = relayStationConfig{
 		Stations: []relayStation{{ID: "station", Enabled: true}},
 		Bindings: []RelayGroupBinding{{GroupID: 1, Sources: []RelayStationSource{{
-			StationID: "station", SourceGroup: "default", Enabled: true,
+			StationID: "station", SourceGroup: "default", Enabled: true, Delta: 0.25,
 		}}}},
 	}
 	service.rates = relayRateCache{Rates: map[string]map[string]RelayStationRate{
@@ -52,6 +52,9 @@ func TestEstimateProfitExcludesAdminUsage(t *testing.T) {
 	}
 	if len(estimates) != 1 || estimates[0].EstimatedProfit == nil || *estimates[0].EstimatedProfit != 1 {
 		t.Fatalf("profit estimates = %#v", estimates)
+	}
+	if estimates[0].UpstreamRate == nil || *estimates[0].UpstreamRate != rate {
+		t.Fatalf("profit estimate used adjusted rate: %#v", estimates[0])
 	}
 }
 

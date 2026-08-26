@@ -100,8 +100,12 @@ func profitControlVetoLatest(ctx context.Context, selected *Account, snapshot *S
 	// ResolveRouteForAccount can refresh a relay rate after the scheduler snapshot
 	// was read. Preserve that request-local value during the terminal check.
 	if selected.IsRelay() && latest != selected {
+		updatedAt := selected.relayEffectiveRateUpdatedAt()
 		if rate, ok := selected.RelayEffectiveRate(); ok {
-			latest.setRelayEffectiveRate(rate, selected.relayEffectiveRateUpdatedAt())
+			latest.setRelayEffectiveRate(rate, updatedAt)
+		}
+		if rate, ok := selected.RelayUpstreamRate(); ok {
+			latest.setRelayUpstreamRate(rate, updatedAt)
 		}
 	}
 	vetoed, reason := openAIProfitControlVetoReason(ctx, latest)

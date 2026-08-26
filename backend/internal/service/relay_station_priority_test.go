@@ -230,7 +230,11 @@ func TestSyncRelayGroupRateMultipliersUsesHighestEnabledCorrection(t *testing.T)
 		1: {ID: 1, RateMultiplier: 1},
 		2: {ID: 2, RateMultiplier: 0.8},
 	}}
-	service := &RelayStationService{groupRepo: repo}
+	accountRepo := &relayNativeAccountRepo{accounts: []Account{{ID: 42, Extra: map[string]any{
+		relayAccountMarkerKey: true,
+		relayAccountKeyKey:    relayAccountKey("one", 1, "first"),
+	}}}}
+	service := &RelayStationService{groupRepo: repo, accountRepo: accountRepo}
 	snapshot := relayStationConfig{
 		Stations: []relayStation{
 			{ID: "one", Enabled: true},
@@ -278,6 +282,12 @@ func TestSyncRelayGroupRateMultipliersUsesHighestEnabledCorrection(t *testing.T)
 	}
 	if len(repo.updates) != 1 || repo.updates[0] != 1 {
 		t.Fatalf("updated groups = %v, want only group 1", repo.updates)
+	}
+	updates := accountRepo.extraUpdates[42]
+	upstreamRate, upstreamOK := updates["relay_upstream_rate"].(float64)
+	effectiveRate, effectiveOK := updates["relay_effective_rate"].(float64)
+	if !upstreamOK || !effectiveOK || upstreamRate != first || math.Abs(effectiveRate-0.3) > 1e-9 {
+		t.Fatalf("published relay rates = %#v, want upstream 0.2 and effective 0.3", updates)
 	}
 }
 

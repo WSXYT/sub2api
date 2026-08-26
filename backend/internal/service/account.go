@@ -213,10 +213,26 @@ func (a *Account) RelayGroupID() int64 {
 }
 
 func (a *Account) RelayEffectiveRate() (float64, bool) {
+	return a.relayRate("relay_effective_rate")
+}
+
+func (a *Account) RelayUpstreamRate() (float64, bool) {
+	return a.relayRate("relay_upstream_rate")
+}
+
+func (a *Account) RelayCostRate() (float64, bool) {
+	if rate, ok := a.RelayUpstreamRate(); ok {
+		return rate, true
+	}
+	// Legacy relay snapshots only stored the adjusted rate.
+	return a.RelayEffectiveRate()
+}
+
+func (a *Account) relayRate(key string) (float64, bool) {
 	if a == nil || !a.IsRelay() || a.Extra == nil {
 		return 0, false
 	}
-	raw, exists := a.Extra["relay_effective_rate"]
+	raw, exists := a.Extra[key]
 	if !exists || raw == nil {
 		return 0, false
 	}
@@ -229,13 +245,21 @@ func (a *Account) RelayEffectiveRate() (float64, bool) {
 }
 
 func (a *Account) setRelayEffectiveRate(value float64, updatedAt time.Time) {
+	a.setRelayRate("relay_effective_rate", value, updatedAt)
+}
+
+func (a *Account) setRelayUpstreamRate(value float64, updatedAt time.Time) {
+	a.setRelayRate("relay_upstream_rate", value, updatedAt)
+}
+
+func (a *Account) setRelayRate(key string, value float64, updatedAt time.Time) {
 	if a == nil || !a.IsRelay() {
 		return
 	}
 	if a.Extra == nil {
 		a.Extra = make(map[string]any)
 	}
-	a.Extra["relay_effective_rate"] = value
+	a.Extra[key] = value
 	a.Extra["relay_rate_updated_at"] = updatedAt.Format(time.RFC3339Nano)
 }
 
@@ -265,7 +289,7 @@ func (a *Account) IsSyntheticUITest() bool {
 // - 负数属于非法数据，出于安全考虑按 1.0 处理
 func (a *Account) BillingRateMultiplier() float64 {
 	if a != nil && a.IsRelay() {
-		if rate, ok := a.RelayEffectiveRate(); ok {
+		if rate, ok := a.RelayCostRate(); ok {
 			return rate
 		}
 	}

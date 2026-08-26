@@ -438,6 +438,38 @@ func TestOpenAIGatewayServiceRecordUsage_UsesUserSpecificGroupRate(t *testing.T)
 	require.Equal(t, 1, userRepo.deductCalls)
 }
 
+func TestOpenAIGatewayServiceRecordUsage_PersistsSelectedRelayUpstreamRate(t *testing.T) {
+	selectedRate := 0.2
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	userRepo := &openAIRecordUsageUserRepoStub{}
+	subRepo := &openAIRecordUsageSubRepoStub{}
+	svc := newOpenAIRecordUsageServiceForTest(usageRepo, userRepo, subRepo, nil)
+
+	err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
+		Result: &OpenAIForwardResult{
+			RequestID:         "resp_relay_raw_rate",
+			Usage:             OpenAIUsage{InputTokens: 1000, OutputTokens: 100},
+			Model:             "gpt-5.1",
+			Duration:          time.Second,
+			SelectedRelayRate: &selectedRate,
+		},
+		APIKey: &APIKey{ID: 1005, Group: &Group{RateMultiplier: 0.205}},
+		User:   &User{ID: 2005},
+		Account: &Account{ID: 3005, Type: AccountTypeRelay, Extra: map[string]any{
+			relayAccountMarkerKey:   true,
+			"relay_effective_rate":  0.205,
+			"relay_upstream_rate":   selectedRate,
+			"relay_rate_updated_at": time.Now().Format(time.RFC3339Nano),
+		}},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, usageRepo.lastLog)
+	require.NotNil(t, usageRepo.lastLog.AccountRateMultiplier)
+	require.Equal(t, selectedRate, *usageRepo.lastLog.AccountRateMultiplier)
+	require.Greater(t, usageRepo.lastLog.TotalCost, 0.0)
+}
+
 func TestOpenAIGatewayServiceRecordUsage_PeakRateAffectsTokenModeImageOutputTokens(t *testing.T) {
 	groupID := int64(14)
 	groupRate := 1.0

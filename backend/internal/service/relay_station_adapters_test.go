@@ -170,6 +170,37 @@ func TestForwardAccountRequiresManagedAIHubRate(t *testing.T) {
 	}
 }
 
+func TestForwardAccountKeepsRawAIHubRateForAccountCost(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("x-aihub-auto-rate", "0.2")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"chatcmpl_1","choices":[]}`))
+	}))
+	defer upstream.Close()
+
+	adjust := true
+	account := &Account{Type: AccountTypeRelay}
+	service := &RelayStationService{activeAIHubStations: map[string]struct{}{"aihub": {}}}
+	inbound, _ := http.NewRequest(http.MethodPost, "http://sub2api.test/v1/chat/completions", nil)
+	response, err := service.ForwardAccount(context.Background(), account, &RelayRoute{
+		station: relayStation{ID: "aihub", Type: RelayStationTypeAIHub, BaseURL: upstream.URL},
+		source:  RelayStationSource{SourceGroup: "default", AdjustRate: &adjust, Delta: 0.005},
+	}, inbound)
+	if err != nil {
+		t.Fatalf("ForwardAccount() error = %v", err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	if got := response.Header.Get("x-aihub-auto-rate"); got != "0.2" {
+		t.Fatalf("selected upstream rate header = %q, want raw rate 0.2", got)
+	}
+	if got, ok := account.RelayUpstreamRate(); !ok || got != 0.2 {
+		t.Fatalf("relay upstream rate = %v/%v, want 0.2/true", got, ok)
+	}
+	if got, ok := account.RelayEffectiveRate(); !ok || got != 0.205 {
+		t.Fatalf("relay effective rate = %v/%v, want 0.205/true", got, ok)
+	}
+}
+
 func TestRelayTestFailureHidesUpstreamDetails(t *testing.T) {
 	err := relayTestFailure("private", errors.New("secret-provider at https://secret.example"))
 	if strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), "private") {
@@ -1345,6 +1376,9 @@ func TestStationPollingIdentityUpdateInvalidatesRates(t *testing.T) {
 	}
 	if got := repo.extraUpdates[1]["relay_effective_rate"]; got != nil {
 		t.Fatalf("relay effective rate = %v, want unavailable after station endpoint update", got)
+	}
+	if got := repo.extraUpdates[1]["relay_upstream_rate"]; got != nil {
+		t.Fatalf("relay upstream rate = %v, want unavailable after station endpoint update", got)
 	}
 }
 

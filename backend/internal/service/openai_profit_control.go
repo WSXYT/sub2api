@@ -306,12 +306,12 @@ func openAIProfitControlVetoReason(ctx context.Context, account *Account) (bool,
 	}
 	rateMultiplier := account.RateMultiplier
 	if account.IsRelay() {
-		effectiveRate, ok := account.RelayEffectiveRate()
+		upstreamRate, ok := account.RelayCostRate()
 		if !ok {
 			openAIProfitControlObserverInstance.recordVeto(gate.groupID, gate.platform, gate.threshold, openAIProfitFilterReasonInvalidAccountRate)
 			return true, openAIProfitFilterReasonInvalidAccountRate
 		}
-		rateMultiplier = &effectiveRate
+		rateMultiplier = &upstreamRate
 	}
 	if rateMultiplier == nil ||
 		math.IsNaN(*rateMultiplier) ||

@@ -15,16 +15,26 @@ func TestAccount_BillingRateMultiplier_DefaultsToOneWhenNil(t *testing.T) {
 	require.Equal(t, 1.0, a.BillingRateMultiplier())
 }
 
-func TestAccount_BillingRateMultiplier_UsesRelayEffectiveRate(t *testing.T) {
+func TestAccount_BillingRateMultiplier_UsesRelayUpstreamRate(t *testing.T) {
 	manual := 1.0
 	account := Account{
 		RateMultiplier: &manual,
 		Extra: map[string]any{
 			relayAccountMarkerKey:   true,
-			"relay_effective_rate":  0.2,
+			"relay_effective_rate":  0.205,
+			"relay_upstream_rate":   0.2,
 			"relay_rate_updated_at": time.Now().Format(time.RFC3339Nano),
 		},
 	}
+	require.Equal(t, 0.2, account.BillingRateMultiplier())
+}
+
+func TestAccount_BillingRateMultiplier_FallsBackToLegacyRelayEffectiveRate(t *testing.T) {
+	account := Account{Extra: map[string]any{
+		relayAccountMarkerKey:   true,
+		"relay_effective_rate":  0.2,
+		"relay_rate_updated_at": time.Now().Format(time.RFC3339Nano),
+	}}
 	require.Equal(t, 0.2, account.BillingRateMultiplier())
 }
 
