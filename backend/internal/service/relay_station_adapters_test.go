@@ -196,8 +196,10 @@ func TestForwardAccountKeepsRawAIHubRateForAccountCost(t *testing.T) {
 	if got, ok := account.RelayUpstreamRate(); !ok || got != 0.2 {
 		t.Fatalf("relay upstream rate = %v/%v, want 0.2/true", got, ok)
 	}
-	if got, ok := account.RelayEffectiveRate(); !ok || got != 0.205 {
-		t.Fatalf("relay effective rate = %v/%v, want 0.205/true", got, ok)
+	wantEffective := 0.2
+	wantEffective += 0.005
+	if got, ok := account.RelayEffectiveRate(); !ok || got != wantEffective {
+		t.Fatalf("relay effective rate = %v/%v, want %v/true", got, ok, wantEffective)
 	}
 }
 
