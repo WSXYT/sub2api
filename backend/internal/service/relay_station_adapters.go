@@ -1390,21 +1390,23 @@ func relayRouteStationID(route *RelayRoute) string {
 }
 
 type relaySanitizedSSEBody struct {
-	body        io.ReadCloser
-	reader      *bufio.Reader
-	path        string
-	stationID   string
-	pending     []byte
-	terminalErr error
-	done        bool
+	body                  io.ReadCloser
+	reader                *bufio.Reader
+	stationID             string
+	bufferResponsesOutput bool
+	clientOutputStarted   bool
+	preamble              []byte
+	pending               []byte
+	terminalErr           error
+	done                  bool
 }
 
 func newRelaySanitizedSSEBody(body io.ReadCloser, path, stationID string) io.ReadCloser {
 	return &relaySanitizedSSEBody{
-		body:      body,
-		reader:    bufio.NewReader(body),
-		path:      path,
-		stationID: stationID,
+		body:                  body,
+		reader:                bufio.NewReader(body),
+		stationID:             stationID,
+		bufferResponsesOutput: strings.Contains(strings.ToLower(path), "/responses"),
 	}
 }
 
@@ -1416,19 +1418,36 @@ func (r *relaySanitizedSSEBody) Read(destination []byte) (int, error) {
 				zap.String("station_id", r.stationID),
 				zap.String("error_type", fmt.Sprintf("%T", err)),
 			)
-			r.pending = relayGenericSSEError(r.path)
-			r.terminalErr = ErrRelayUpstreamFailed
-			r.done = true
-			_ = r.body.Close()
+			r.failBeforeClientError()
 		} else if len(event) > 0 {
 			if relaySSEErrorEvent(event) {
 				logger.L().Warn("relay upstream returned a streaming error",
 					zap.String("station_id", r.stationID),
 				)
-				r.pending = relayGenericSSEError(r.path)
-				r.terminalErr = ErrRelayUpstreamFailed
-				r.done = true
-				_ = r.body.Close()
+				r.failBeforeClientError()
+			} else if r.bufferResponsesOutput && !r.clientOutputStarted {
+				data, eventType := relayOpenAISSEEventData(event)
+				if relayResponsesSSETerminatedWithoutOutput(data, eventType) {
+					logger.L().Warn("relay upstream returned an empty Responses stream",
+						zap.String("station_id", r.stationID),
+					)
+					r.failBeforeClientError()
+				} else if openAIStreamDataStartsClientOutput(string(data), eventType) {
+					r.clientOutputStarted = true
+					r.pending = append(r.pending, r.preamble...)
+					r.pending = append(r.pending, event...)
+					r.preamble = nil
+				} else if len(r.preamble)+len(event) > relaySSEEventLimit {
+					logger.L().Warn("relay upstream Responses preamble exceeded sanitization limit",
+						zap.String("station_id", r.stationID),
+					)
+					r.failBeforeClientError()
+				} else {
+					r.preamble = append(r.preamble, event...)
+					if errors.Is(err, io.EOF) {
+						r.failBeforeClientError()
+					}
+				}
 			} else {
 				r.pending = event
 				if errors.Is(err, io.EOF) {
@@ -1436,8 +1455,12 @@ func (r *relaySanitizedSSEBody) Read(destination []byte) (int, error) {
 				}
 			}
 		} else if err != nil {
-			r.done = true
-			return 0, err
+			if r.bufferResponsesOutput && !r.clientOutputStarted && len(r.preamble) > 0 {
+				r.failBeforeClientError()
+			} else {
+				r.done = true
+				return 0, err
+			}
 		}
 	}
 	if len(r.pending) == 0 {
@@ -1451,6 +1474,13 @@ func (r *relaySanitizedSSEBody) Read(destination []byte) (int, error) {
 	count := copy(destination, r.pending)
 	r.pending = r.pending[count:]
 	return count, nil
+}
+
+func (r *relaySanitizedSSEBody) failBeforeClientError() {
+	r.preamble = nil
+	r.terminalErr = ErrRelayUpstreamFailed
+	r.done = true
+	_ = r.body.Close()
 }
 
 func (r *relaySanitizedSSEBody) Close() error {
@@ -1472,6 +1502,34 @@ func readRelaySSEEvent(reader *bufio.Reader) ([]byte, error) {
 		if err != nil {
 			return event, err
 		}
+	}
+}
+
+func relayOpenAISSEEventData(event []byte) ([]byte, string) {
+	var data []byte
+	eventType := ""
+	for _, line := range bytes.Split(event, []byte{'\n'}) {
+		trimmed := strings.TrimSpace(string(line))
+		if value, ok := extractOpenAISSEDataLine(trimmed); ok {
+			data = append(data, value...)
+			continue
+		}
+		if value, ok := extractOpenAISSEEventLine(trimmed); ok {
+			eventType = value
+		}
+	}
+	return data, effectiveOpenAISSEEventType(data, eventType)
+}
+
+func relayResponsesSSETerminatedWithoutOutput(data []byte, eventType string) bool {
+	if bytes.Equal(bytes.TrimSpace(data), []byte("[DONE]")) {
+		return true
+	}
+	switch strings.TrimSpace(eventType) {
+	case "response.completed", "response.done":
+		return openAIResponsesCompletedEventIsEmpty(data, nil)
+	default:
+		return false
 	}
 }
 
@@ -1522,19 +1580,6 @@ func relayJSONErrorPayload(payload []byte) bool {
 	status := strings.ToLower(strings.TrimSpace(parsed.Get("response.status").String()))
 	return parsed.Get("error").Exists() || parsed.Get("response.error").Exists() ||
 		typeName == "error" || strings.Contains(typeName, "failed") || status == "failed"
-}
-
-func relayGenericSSEError(path string) []byte {
-	switch {
-	case strings.Contains(path, "/v1beta/"):
-		return []byte("data: {\"error\":{\"code\":502,\"message\":\"Upstream request failed\",\"status\":\"UNAVAILABLE\"}}\n\n")
-	case strings.Contains(path, "/messages"):
-		return []byte("event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"Upstream request failed\"}}\n\n")
-	case strings.Contains(path, "/responses"):
-		return []byte("event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"code\":\"server_error\",\"message\":\"Upstream request failed\"}}}\n\n")
-	default:
-		return []byte("data: {\"error\":{\"type\":\"upstream_error\",\"message\":\"Upstream request failed\"}}\n\n")
-	}
 }
 
 // forward constructs an OpenAI-compatible upstream request with only

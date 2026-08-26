@@ -1,11 +1,16 @@
 package handler
 
 import (
+	"errors"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/gin-gonic/gin"
 )
 
 func TestApplyRelayOpenAIResult(t *testing.T) {
@@ -73,6 +78,39 @@ func TestApplyRelayGatewayResultReadsGeminiUsage(t *testing.T) {
 	}
 	if result.Usage.InputTokens != 20 || result.Usage.OutputTokens != 8 || result.Usage.CacheReadInputTokens != 4 {
 		t.Fatalf("unexpected Gemini usage: %#v", result.Usage)
+	}
+}
+
+type relayFailingReader struct{}
+
+func (relayFailingReader) Read([]byte) (int, error) {
+	return 0, service.ErrRelayUpstreamFailed
+}
+
+func TestForwardRelayOpenAIResponseDoesNotCommitEarlyFailure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	streamStarted := false
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(relayFailingReader{}),
+	}
+
+	_, err := forwardRelayOpenAIResponse(c, response, relayGatewayForwardInput{
+		Path:          "/v1/responses",
+		OriginalModel: "gpt-5.6-sol",
+		UpstreamModel: "gpt-5.6-sol",
+		Stream:        true,
+	}, time.Now(), &streamStarted)
+	var failoverErr *service.UpstreamFailoverError
+	if !errors.As(err, &failoverErr) {
+		t.Fatalf("forwardRelayOpenAIResponse() error = %v, want relay failover", err)
+	}
+	if streamStarted || c.Writer.Written() || recorder.Body.Len() != 0 {
+		t.Fatalf("early relay failure committed client output: started=%v written=%v body=%q", streamStarted, c.Writer.Written(), recorder.Body.String())
 	}
 }
 

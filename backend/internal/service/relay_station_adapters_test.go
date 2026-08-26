@@ -237,8 +237,8 @@ func TestRelaySanitizedSSEBodyRejectsOversizedEvent(t *testing.T) {
 	if !errors.Is(err, ErrRelayUpstreamFailed) {
 		t.Fatalf("read sanitized stream: %v", err)
 	}
-	if strings.Contains(string(payload), strings.Repeat("x", 64)) || !strings.Contains(string(payload), "Upstream request failed") {
-		t.Fatalf("oversized stream was not sanitized: %q", payload)
+	if len(payload) != 0 {
+		t.Fatalf("oversized stream wrote client bytes before failover: %q", payload)
 	}
 }
 
@@ -250,6 +250,7 @@ func TestForwardAccountHidesSuccessfulStatusErrorPayloads(t *testing.T) {
 		path        string
 		stream      bool
 		wantError   bool
+		wantSafe    bool
 	}{
 		{
 			name:        "json",
@@ -293,6 +294,18 @@ func TestForwardAccountHidesSuccessfulStatusErrorPayloads(t *testing.T) {
 			path:        "/v1/chat/completions",
 		},
 		{
+			name:        "responses preamble then failed",
+			contentType: "text/event-stream",
+			body:        "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_failed\",\"status\":\"in_progress\"}}\n\nevent: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"message\":\"secret-provider\"}}}\n\n",
+			path:        "/v1/responses",
+		},
+		{
+			name:        "responses empty completed",
+			contentType: "text/event-stream",
+			body:        "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_empty\",\"status\":\"in_progress\"}}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_empty\",\"status\":\"completed\",\"output\":[]}}\n\n",
+			path:        "/v1/responses",
+		},
+		{
 			name:        "sse raw json error",
 			contentType: "text/event-stream",
 			body:        `{"error":{"message":"secret-provider at https://secret.example"}}`,
@@ -309,6 +322,7 @@ func TestForwardAccountHidesSuccessfulStatusErrorPayloads(t *testing.T) {
 			contentType: "text/event-stream",
 			body:        "data: {\"choices\":[{\"delta\":{\"content\":\"safe\"}}]}\n\nevent: error\ndata: {\"error\":{\"message\":\"secret-provider\"}}\n\n",
 			path:        "/v1/chat/completions",
+			wantSafe:    true,
 		},
 		{
 			name:        "gemini sse",
@@ -351,10 +365,32 @@ func TestForwardAccountHidesSuccessfulStatusErrorPayloads(t *testing.T) {
 			if strings.Contains(text, "secret-provider") || strings.Contains(text, "secret.example") {
 				t.Fatalf("sanitized stream exposed upstream details: %s", text)
 			}
-			if !strings.Contains(text, "Upstream request failed") {
-				t.Fatalf("sanitized stream omitted generic error: %s", text)
+			if test.wantSafe {
+				if !strings.Contains(text, "safe") {
+					t.Fatalf("sanitized stream lost prior safe output: %s", text)
+				}
+			} else if text != "" {
+				t.Fatalf("sanitized stream wrote client bytes before failover: %s", text)
 			}
 		})
+	}
+}
+
+func TestForwardAccountBuffersResponsesPreambleUntilOutput(t *testing.T) {
+	body := "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_ok\",\"status\":\"in_progress\"}}\n\n" +
+		"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n" +
+		"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_ok\",\"status\":\"completed\",\"output\":[{\"type\":\"message\"}],\"usage\":{\"input_tokens\":2,\"output_tokens\":1}}}\n\n"
+	stream := newRelaySanitizedSSEBody(io.NopCloser(strings.NewReader(body)), "/v1/responses", "private")
+	payload, err := io.ReadAll(stream)
+	_ = stream.Close()
+	if err != nil {
+		t.Fatalf("read valid Responses stream: %v", err)
+	}
+	text := string(payload)
+	for _, eventType := range []string{"response.created", "response.output_text.delta", "response.completed"} {
+		if !strings.Contains(text, eventType) {
+			t.Fatalf("valid Responses stream lost %s: %s", eventType, text)
+		}
 	}
 }
 
