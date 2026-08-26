@@ -294,6 +294,12 @@ func TestForwardAccountHidesSuccessfulStatusErrorPayloads(t *testing.T) {
 			path:        "/v1/chat/completions",
 		},
 		{
+			name:        "empty responses stream",
+			contentType: "text/event-stream",
+			body:        "",
+			path:        "/v1/responses",
+		},
+		{
 			name:        "responses preamble then failed",
 			contentType: "text/event-stream",
 			body:        "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_failed\",\"status\":\"in_progress\"}}\n\nevent: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"message\":\"secret-provider\"}}}\n\n",

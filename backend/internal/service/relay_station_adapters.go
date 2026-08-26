@@ -1455,7 +1455,7 @@ func (r *relaySanitizedSSEBody) Read(destination []byte) (int, error) {
 				}
 			}
 		} else if err != nil {
-			if r.bufferResponsesOutput && !r.clientOutputStarted && len(r.preamble) > 0 {
+			if r.bufferResponsesOutput && !r.clientOutputStarted {
 				r.failBeforeClientError()
 			} else {
 				r.done = true
