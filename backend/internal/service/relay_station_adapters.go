@@ -26,9 +26,18 @@ import (
 )
 
 const (
-	relayStationControlTimeout = 15 * time.Second
-	relayResponseSanitizeLimit = 2 << 20
-	relaySSEEventLimit         = 1 << 20
+	relayStationControlTimeout      = 15 * time.Second
+	relayStationSessionFallbackTTL  = time.Hour
+	relayStationLoginRetryDelay     = 20 * time.Minute
+	relayStationTransientRetryDelay = time.Minute
+	relayStationSessionExpirySkew   = time.Minute
+	relayResponseSanitizeLimit      = 2 << 20
+	relaySSEEventLimit              = 1 << 20
+)
+
+var (
+	errNewAPIStationLoginRejected           = errors.New("newapi login was rejected")
+	errRelayStationConfigChangedDuringLogin = errors.New("relay station configuration changed during login")
 )
 
 type relayStationSession struct {
@@ -36,6 +45,7 @@ type relayStationSession struct {
 	token       string
 	userID      string
 	expiresAt   time.Time
+	loginErr    error
 	keysMu      sync.Mutex
 	proxyTokens map[string]string
 }
@@ -707,16 +717,50 @@ func (s *RelayStationService) relaySession(ctx context.Context, station relaySta
 	existing := s.sessions[station.ID]
 	s.mu.RUnlock()
 	if existing != nil && existing.expiresAt.After(time.Now()) {
+		if existing.loginErr != nil {
+			return nil, existing.loginErr
+		}
+		return existing, nil
+	}
+
+	actual, _ := s.sessionLocks.LoadOrStore(station.ID, newContextMutex())
+	lock, ok := actual.(*contextMutex)
+	if !ok {
+		return nil, errors.New("relay station session lock is invalid")
+	}
+	if err := lock.Lock(ctx); err != nil {
+		return nil, err
+	}
+	defer lock.Unlock()
+
+	s.mu.RLock()
+	existing = s.sessions[station.ID]
+	loginRevision := s.revision
+	s.mu.RUnlock()
+	if existing != nil && existing.expiresAt.After(time.Now()) {
+		if existing.loginErr != nil {
+			return nil, existing.loginErr
+		}
 		return existing, nil
 	}
 
 	session, err := s.loginRelayStation(ctx, station)
+	retryDelay := relayStationTransientRetryDelay
+	var statusErr *relayHTTPStatusError
+	if errors.Is(err, errNewAPIStationLoginRejected) || (errors.As(err, &statusErr) && statusErr.status == http.StatusTooManyRequests) {
+		retryDelay = relayStationLoginRetryDelay
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.revision != loginRevision {
+		return nil, errRelayStationConfigChangedDuringLogin
+	}
 	if err != nil {
+		s.sessions[station.ID] = &relayStationSession{expiresAt: time.Now().Add(retryDelay), loginErr: err}
 		return nil, err
 	}
-	s.mu.Lock()
 	s.sessions[station.ID] = session
-	s.mu.Unlock()
 	return session, nil
 }
 
@@ -766,21 +810,33 @@ func loginNewAPIStation(ctx context.Context, service *RelayStationService, stati
 	var payload struct {
 		Success *bool `json:"success"`
 		Data    struct {
-			ID          int64  `json:"id"`
-			AccessToken string `json:"access_token"`
+			ID              int64  `json:"id"`
+			AccessToken     string `json:"access_token"`
+			AccessExpiresAt int64  `json:"access_expires_at"`
+			User            struct {
+				ID int64 `json:"id"`
+			} `json:"user"`
 		} `json:"data"`
 	}
 	if err := decodeRelayJSON(resp.Body, &payload); err != nil {
 		return nil, err
 	}
 	if payload.Success != nil && !*payload.Success {
-		return nil, errors.New("newapi login was rejected")
+		return nil, errNewAPIStationLoginRejected
+	}
+	userID := payload.Data.ID
+	if userID == 0 {
+		userID = payload.Data.User.ID
+	}
+	expiresAt := time.Now().Add(relayStationSessionFallbackTTL)
+	if payload.Data.AccessExpiresAt > time.Now().Add(relayStationSessionExpirySkew).Unix() {
+		expiresAt = time.Unix(payload.Data.AccessExpiresAt, 0).Add(-relayStationSessionExpirySkew)
 	}
 	return &relayStationSession{
 		client:      client,
 		token:       strings.TrimSpace(payload.Data.AccessToken),
-		userID:      strconv.FormatInt(payload.Data.ID, 10),
-		expiresAt:   time.Now().Add(10 * time.Minute),
+		userID:      strconv.FormatInt(userID, 10),
+		expiresAt:   expiresAt,
 		proxyTokens: make(map[string]string),
 	}, nil
 }

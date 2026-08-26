@@ -423,12 +423,13 @@ type RelayStationService struct {
 	config relayStationConfig
 	rates  relayRateCache
 
-	revision   uint64
-	routes     map[string]relayRouteCacheEntry
-	sessions   map[string]*relayStationSession
-	started    atomic.Bool
-	stopOnce   sync.Once
-	stopSignal chan struct{}
+	revision     uint64
+	routes       map[string]relayRouteCacheEntry
+	sessions     map[string]*relayStationSession
+	sessionLocks sync.Map
+	started      atomic.Bool
+	stopOnce     sync.Once
+	stopSignal   chan struct{}
 }
 
 func NewRelayStationService(settingRepo SettingRepository, groupRepo GroupRepository, accountRepo AccountRepository, usage *UsageService, cfg *config.Config) *RelayStationService {

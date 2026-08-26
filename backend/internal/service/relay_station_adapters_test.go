@@ -618,6 +618,139 @@ func TestListGroupsUsesStationRateSources(t *testing.T) {
 	}
 }
 
+func TestRelaySessionSerializesNewAPILogin(t *testing.T) {
+	accessExpiresAt := time.Now().Add(15 * time.Minute).Unix()
+	loginStarted := make(chan struct{})
+	releaseLogin := make(chan struct{})
+	loginCount := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		loginCount++
+		close(loginStarted)
+		<-releaseLogin
+		_, _ = fmt.Fprintf(w, `{"success":true,"data":{"access_token":"dashboard","access_expires_at":%d,"user":{"id":6015}}}`, accessExpiresAt)
+	}))
+	defer upstream.Close()
+
+	service := NewRelayStationService(nil, nil, nil, nil, nil)
+	station := relayStation{ID: "station", Type: RelayStationTypeNewAPI, ControlURL: upstream.URL, Username: "admin", Password: "password"}
+	firstResult := make(chan *relayStationSession, 1)
+	firstErr := make(chan error, 1)
+	go func() {
+		session, err := service.relaySession(context.Background(), station)
+		firstResult <- session
+		firstErr <- err
+	}()
+	<-loginStarted
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := service.relaySession(canceled, station); !errors.Is(err, context.Canceled) {
+		t.Fatalf("contending relaySession error = %v, want context cancellation", err)
+	}
+	close(releaseLogin)
+	if err := <-firstErr; err != nil {
+		t.Fatalf("relaySession: %v", err)
+	}
+	session := <-firstResult
+	if session == nil || session.userID != "6015" {
+		t.Fatalf("session = %#v, want nested NewAPI user id", session)
+	}
+	wantExpiry := time.Unix(accessExpiresAt, 0).Add(-relayStationSessionExpirySkew)
+	if !session.expiresAt.Equal(wantExpiry) {
+		t.Fatalf("session expiry = %v, want %v", session.expiresAt, wantExpiry)
+	}
+	if loginCount != 1 {
+		t.Fatalf("NewAPI login count = %d, want 1", loginCount)
+	}
+}
+
+func TestRelaySessionBacksOffRejectedNewAPILogin(t *testing.T) {
+	var loginCount int
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		loginCount++
+		_, _ = w.Write([]byte(`{"success":false,"message":"Too many attempts. Please try again later."}`))
+	}))
+	defer upstream.Close()
+
+	service := NewRelayStationService(nil, nil, nil, nil, nil)
+	station := relayStation{ID: "station", Type: RelayStationTypeNewAPI, ControlURL: upstream.URL, Username: "admin", Password: "password"}
+	for range 2 {
+		if _, err := service.relaySession(context.Background(), station); !errors.Is(err, errNewAPIStationLoginRejected) {
+			t.Fatalf("relaySession error = %v, want login rejected", err)
+		}
+	}
+	if loginCount != 1 {
+		t.Fatalf("NewAPI rejected login count = %d, want 1 during backoff", loginCount)
+	}
+}
+
+func TestRelaySessionBacksOffHTTPRateLimit(t *testing.T) {
+	loginCount := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		loginCount++
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer upstream.Close()
+
+	service := NewRelayStationService(nil, nil, nil, nil, nil)
+	station := relayStation{ID: "station", Type: RelayStationTypeNewAPI, ControlURL: upstream.URL, Username: "admin", Password: "password"}
+	for range 2 {
+		if _, err := service.relaySession(context.Background(), station); err == nil {
+			t.Fatal("relaySession unexpectedly accepted a rate-limited login")
+		}
+	}
+	if loginCount != 1 {
+		t.Fatalf("NewAPI rate-limited login count = %d, want 1 during backoff", loginCount)
+	}
+}
+
+func TestRelaySessionRejectsStaleLoginPublication(t *testing.T) {
+	loginStarted := make(chan struct{})
+	releaseLogin := make(chan struct{})
+	loginCount := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		loginCount++
+		if loginCount == 1 {
+			close(loginStarted)
+			<-releaseLogin
+		}
+		_, _ = w.Write([]byte(`{"success":true,"data":{"id":6015,"access_token":"dashboard"}}`))
+	}))
+	defer upstream.Close()
+
+	service := NewRelayStationService(nil, nil, nil, nil, nil)
+	station := relayStation{ID: "station", Type: RelayStationTypeNewAPI, ControlURL: upstream.URL, Username: "admin", Password: "old-password"}
+	loginErr := make(chan error, 1)
+	go func() {
+		_, err := service.relaySession(context.Background(), station)
+		loginErr <- err
+	}()
+	<-loginStarted
+
+	service.mu.Lock()
+	service.clearRoutesLocked()
+	delete(service.sessions, station.ID)
+	service.mu.Unlock()
+	close(releaseLogin)
+	if err := <-loginErr; !errors.Is(err, errRelayStationConfigChangedDuringLogin) {
+		t.Fatalf("stale login error = %v, want configuration change", err)
+	}
+	service.mu.RLock()
+	staleSession := service.sessions[station.ID]
+	service.mu.RUnlock()
+	if staleSession != nil {
+		t.Fatal("stale login session was published after configuration change")
+	}
+
+	station.Password = "new-password"
+	if _, err := service.relaySession(context.Background(), station); err != nil {
+		t.Fatalf("relaySession after configuration change: %v", err)
+	}
+	if loginCount != 2 {
+		t.Fatalf("NewAPI login count = %d, want a fresh login after configuration change", loginCount)
+	}
+}
+
 func TestSyncAIHubConfigPostsNativePolicy(t *testing.T) {
 	localMax := 0.4
 	bandMin := 0.1
