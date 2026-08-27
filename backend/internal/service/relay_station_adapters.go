@@ -1714,7 +1714,10 @@ func relayJSONErrorPayload(payload []byte) bool {
 	parsed := gjson.ParseBytes(payload)
 	typeName := strings.ToLower(strings.TrimSpace(parsed.Get("type").String()))
 	status := strings.ToLower(strings.TrimSpace(parsed.Get("response.status").String()))
-	return parsed.Get("error").Exists() || parsed.Get("response.error").Exists() ||
+	errorValue := parsed.Get("error")
+	responseErrorValue := parsed.Get("response.error")
+	return (errorValue.Exists() && errorValue.Type != gjson.Null) ||
+		(responseErrorValue.Exists() && responseErrorValue.Type != gjson.Null) ||
 		typeName == "error" || strings.Contains(typeName, "failed") || status == "failed"
 }
 

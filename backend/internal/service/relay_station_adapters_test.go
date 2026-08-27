@@ -479,6 +479,24 @@ func TestForwardAccountBuffersResponsesPreambleUntilOutput(t *testing.T) {
 	}
 }
 
+func TestRelaySanitizedSSEBodyAllowsNullResponseError(t *testing.T) {
+	body := "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_ok\",\"status\":\"in_progress\",\"error\":null}}\n\n" +
+		"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n" +
+		"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_ok\",\"status\":\"completed\",\"error\":null,\"output\":[{\"type\":\"message\"}]}}\n\n"
+	stream := newRelaySanitizedSSEBody(io.NopCloser(strings.NewReader(body)), "/v1/responses", "private")
+	payload, err := io.ReadAll(stream)
+	_ = stream.Close()
+	if err != nil {
+		t.Fatalf("read Responses stream with nullable error fields: %v", err)
+	}
+	text := string(payload)
+	for _, eventType := range []string{"response.created", "response.output_text.delta", "response.completed"} {
+		if !strings.Contains(text, eventType) {
+			t.Fatalf("normal Responses stream lost %s: %s", eventType, text)
+		}
+	}
+}
+
 func TestForwardAccountPreservesValidIncompleteResponses(t *testing.T) {
 	for _, test := range []struct {
 		name        string
