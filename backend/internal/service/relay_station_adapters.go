@@ -1319,7 +1319,7 @@ func (s *RelayStationService) ForwardAccount(ctx context.Context, account *Accou
 		}
 		response.Header.Del("Content-Encoding")
 		contentType := strings.ToLower(response.Header.Get("Content-Type"))
-		if relayRequestExpectsSSE(inbound) || strings.Contains(contentType, "text/event-stream") {
+		if strings.Contains(contentType, "text/event-stream") {
 			response.Header.Set("Content-Type", "text/event-stream")
 			response.Body = newRelaySanitizedSSEBody(response.Body, inbound.URL.Path, relayRouteStationID(route))
 			return response, nil

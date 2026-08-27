@@ -105,7 +105,9 @@ func TestRelayProxyTokenUsesCurrentConfigKeyForStaleRoute(t *testing.T) {
 		loaded: true,
 		config: relayStationConfig{Stations: []relayStation{{
 			ID: "station",
-			APIKeys: map[string]relayAPIKey{"plus": {Name: "saved-key", Key: "sk-current"}},
+			APIKeys: map[string]relayAPIKey{
+				"plus": {Name: "saved-key", Key: "sk-current"},
+			},
 		}}},
 	}
 	staleRouteStation := relayStation{ID: "station", Type: RelayStationTypeSub2API}
@@ -168,6 +170,35 @@ func TestForwardAccountHidesUpstreamErrors(t *testing.T) {
 	statusCode, ok := RelayUpstreamStatus(err)
 	if !ok || statusCode != http.StatusTeapot {
 		t.Fatalf("ForwardAccount() lost internal retry status: %d, %v", statusCode, ok)
+	}
+}
+
+func TestForwardAccountKeepsJSONResponseForStreamRequest(t *testing.T) {
+	called := false
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_1","status":"completed","output":[]}`))
+	}))
+	defer upstream.Close()
+
+	service := &RelayStationService{}
+	inbound, _ := http.NewRequest(http.MethodPost, "http://sub2api.test/v1/responses", nil)
+	inbound.Header.Set("X-Sub2API-Relay-Expected-Stream", "1")
+	response, err := service.ForwardAccount(context.Background(), &Account{}, &RelayRoute{
+		station: relayStation{ID: "private", Type: RelayStationTypeSub2API, BaseURL: upstream.URL, ProxyToken: "token"},
+		source:  RelayStationSource{SourceGroup: "default"},
+	}, inbound)
+	if err != nil {
+		t.Fatalf("ForwardAccount() error = %v", err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	payload, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	if !called || response.Header.Get("Content-Type") != "application/json" || string(payload) != `{"id":"resp_1","status":"completed","output":[]}` {
+		t.Fatalf("stream request JSON response = called:%v content-type:%q payload:%q", called, response.Header.Get("Content-Type"), payload)
 	}
 }
 
