@@ -79,6 +79,48 @@ func TestRateReadyForRouteRejectsStaleCache(t *testing.T) {
 	}
 }
 
+func TestRelayProxyTokenUsesPersistedKeyWithoutAdminLogin(t *testing.T) {
+	service := &RelayStationService{}
+	station := relayStation{
+		ID:   "station",
+		Type: RelayStationTypeSub2API,
+		APIKeys: map[string]relayAPIKey{
+			"plus": {Name: "saved-key", Key: "sk-saved"},
+		},
+	}
+	got, err := service.relayProxyToken(context.Background(), station, RelayStationSource{
+		SourceGroup: "plus",
+		APIKeyName:  "saved-key",
+	})
+	if err != nil {
+		t.Fatalf("relayProxyToken() error = %v", err)
+	}
+	if got != "sk-saved" {
+		t.Fatalf("relayProxyToken() = %q, want persisted key", got)
+	}
+}
+
+func TestRelayProxyTokenUsesCurrentConfigKeyForStaleRoute(t *testing.T) {
+	service := &RelayStationService{
+		loaded: true,
+		config: relayStationConfig{Stations: []relayStation{{
+			ID: "station",
+			APIKeys: map[string]relayAPIKey{"plus": {Name: "saved-key", Key: "sk-current"}},
+		}}},
+	}
+	staleRouteStation := relayStation{ID: "station", Type: RelayStationTypeSub2API}
+	got, err := service.relayProxyToken(context.Background(), staleRouteStation, RelayStationSource{
+		SourceGroup: "plus",
+		APIKeyName:  "saved-key",
+	})
+	if err != nil {
+		t.Fatalf("relayProxyToken() error = %v", err)
+	}
+	if got != "sk-current" {
+		t.Fatalf("relayProxyToken() = %q, want current persisted key", got)
+	}
+}
+
 func TestRelayProxyTargetNormalizesOpenAIAliases(t *testing.T) {
 	tests := []struct {
 		base string

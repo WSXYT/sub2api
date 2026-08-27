@@ -986,6 +986,15 @@ func (s *RelayStationService) relayProxyToken(ctx context.Context, station relay
 	if keyName == "" {
 		keyName = strings.TrimSpace(station.Name) + " - " + sourceGroup
 	}
+	// A persisted source-group key is already sufficient for proxy traffic. Do
+	// not require an administrator login just to reuse it: login outages must
+	// not force needless key creation or take a previously working relay down.
+	if stored := station.APIKeys[sourceGroup]; stored.Key != "" && stored.Name == keyName {
+		return stored.Key, nil
+	}
+	if stored, ok := s.currentRelayAPIKey(station.ID, sourceGroup, keyName); ok {
+		return stored.Key, nil
+	}
 	var lastErr error
 	for attempt := 0; attempt < 2; attempt++ {
 		session, err := s.relaySession(ctx, station)
@@ -995,6 +1004,9 @@ func (s *RelayStationService) relayProxyToken(ctx context.Context, station relay
 		session.keysMu.Lock()
 		if session.proxyTokens == nil {
 			session.proxyTokens = make(map[string]string)
+		}
+		if stored, ok := s.currentRelayAPIKey(station.ID, sourceGroup, keyName); ok {
+			session.proxyTokens[sourceGroup] = stored.Key
 		}
 		if stored := station.APIKeys[sourceGroup]; stored.Key != "" && stored.Name == keyName {
 			session.proxyTokens[sourceGroup] = stored.Key
@@ -1039,6 +1051,20 @@ func (s *RelayStationService) relayProxyToken(ctx context.Context, station relay
 		s.clearRelaySession(station.ID)
 	}
 	return "", lastErr
+}
+
+func (s *RelayStationService) currentRelayAPIKey(stationID, sourceGroup, keyName string) (relayAPIKey, bool) {
+	if s == nil {
+		return relayAPIKey{}, false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	station, found := findRelayStation(s.config.Stations, stationID)
+	if !found {
+		return relayAPIKey{}, false
+	}
+	stored := station.APIKeys[sourceGroup]
+	return stored, stored.Key != "" && stored.Name == keyName
 }
 
 type relayNewAPIToken struct {
@@ -1249,12 +1275,15 @@ func (s *RelayStationService) Forward(ctx context.Context, route *RelayRoute, in
 // selected relay account through its station adapter. Upstream failures are
 // logged internally and collapsed so callers cannot expose station details.
 func (s *RelayStationService) ForwardAccount(ctx context.Context, account *Account, route *RelayRoute, inbound *http.Request) (*http.Response, error) {
+	startedAt := time.Now()
 	response, err := s.forward(ctx, account, route, inbound)
 	if err != nil {
-		logger.L().Warn("relay upstream request failed",
-			zap.String("station_id", relayRouteStationID(route)),
+		fields := relayForwardDiagnosticFields(account, route, inbound)
+		fields = append(fields,
 			zap.String("error_type", fmt.Sprintf("%T", err)),
+			zap.Int64("duration_ms", time.Since(startedAt).Milliseconds()),
 		)
+		logger.L().Warn("relay upstream request failed", fields...)
 		return nil, relayUpstreamFailure(0)
 	}
 	if response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices {
@@ -1324,10 +1353,14 @@ func (s *RelayStationService) ForwardAccount(ctx context.Context, account *Accou
 
 	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4<<10))
 	_ = response.Body.Close()
-	logger.L().Warn("relay upstream returned an error",
-		zap.String("station_id", relayRouteStationID(route)),
-		zap.Int("status", response.StatusCode),
+	fields := relayForwardDiagnosticFields(account, route, inbound)
+	fields = append(fields,
+		zap.Int("upstream_status", response.StatusCode),
+		zap.String("upstream_content_type", response.Header.Get("Content-Type")),
+		zap.String("upstream_request_id", response.Header.Get("x-request-id")),
+		zap.Int64("duration_ms", time.Since(startedAt).Milliseconds()),
 	)
+	logger.L().Warn("relay upstream returned an error", fields...)
 	return nil, relayUpstreamFailure(response.StatusCode)
 }
 
@@ -1387,6 +1420,30 @@ func relayRouteStationID(route *RelayRoute) string {
 		return ""
 	}
 	return route.station.ID
+}
+
+func relayForwardDiagnosticFields(account *Account, route *RelayRoute, inbound *http.Request) []zap.Field {
+	fields := []zap.Field{
+		zap.String("station_id", relayRouteStationID(route)),
+		zap.String("source_group", routeSourceGroup(route)),
+	}
+	if account != nil {
+		fields = append(fields, zap.Int64("account_id", account.ID))
+	}
+	if inbound != nil && inbound.URL != nil {
+		fields = append(fields,
+			zap.String("request_method", inbound.Method),
+			zap.String("request_path", inbound.URL.Path),
+		)
+	}
+	return fields
+}
+
+func routeSourceGroup(route *RelayRoute) string {
+	if route == nil {
+		return ""
+	}
+	return route.source.SourceGroup
 }
 
 type relaySanitizedSSEBody struct {

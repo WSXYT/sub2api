@@ -99,12 +99,18 @@ func TestForwardRelayOpenAIResponseDoesNotCommitEarlyFailure(t *testing.T) {
 		Body:       io.NopCloser(relayFailingReader{}),
 	}
 
+	account := &service.Account{
+		Platform:    service.PlatformOpenAI,
+		Type:        "relay",
+		Credentials: map[string]any{"pool_mode": true},
+		Extra:       map[string]any{"relay_account": true},
+	}
 	_, err := forwardRelayOpenAIResponse(c, response, relayGatewayForwardInput{
 		Path:          "/v1/responses",
 		OriginalModel: "gpt-5.6-sol",
 		UpstreamModel: "gpt-5.6-sol",
 		Stream:        true,
-	}, time.Now(), &streamStarted)
+	}, account, time.Now(), &streamStarted)
 	var failoverErr *service.UpstreamFailoverError
 	if !errors.As(err, &failoverErr) {
 		t.Fatalf("forwardRelayOpenAIResponse() error = %v, want relay failover", err)
@@ -114,7 +120,7 @@ func TestForwardRelayOpenAIResponseDoesNotCommitEarlyFailure(t *testing.T) {
 	}
 }
 
-func TestRelayGatewayFailoverErrorPreservesPoolRetryWithoutClientDetails(t *testing.T) {
+func TestRelayGatewayFailoverErrorPreservesUpstreamStatusWithoutClientDetails(t *testing.T) {
 	account := &service.Account{
 		Platform:    service.PlatformOpenAI,
 		Type:        "relay",
@@ -128,8 +134,28 @@ func TestRelayGatewayFailoverErrorPreservesPoolRetryWithoutClientDetails(t *test
 	if !failoverErr.RetryableOnSameAccount {
 		t.Fatalf("relay 429 did not preserve pool-mode same-account retry")
 	}
-	if failoverErr.StatusCode != http.StatusBadGateway || failoverErr.ClientStatusCode != http.StatusBadGateway || string(failoverErr.ResponseBody) != `{"error":{"message":"Upstream request failed"}}` {
-		t.Fatalf("relay failover error exposed upstream status: %#v", failoverErr)
+	if failoverErr.StatusCode != http.StatusTooManyRequests || failoverErr.ClientStatusCode != http.StatusBadGateway || string(failoverErr.ResponseBody) != `{"error":{"message":"Upstream request failed"}}` {
+		t.Fatalf("relay failover error metadata = %#v", failoverErr)
+	}
+}
+
+func TestRelayGatewayFailoverErrorPreservesServiceUnavailableStatus(t *testing.T) {
+	failoverErr, ok := relayGatewayFailoverError(nil, http.StatusServiceUnavailable).(*service.UpstreamFailoverError)
+	if !ok {
+		t.Fatalf("unexpected relay failover error type")
+	}
+	if failoverErr.StatusCode != http.StatusServiceUnavailable || failoverErr.ClientStatusCode != http.StatusBadGateway {
+		t.Fatalf("service unavailable status was not preserved: %#v", failoverErr)
+	}
+}
+
+func TestRelayGatewayFailoverErrorNormalizesMissingUpstreamStatus(t *testing.T) {
+	failoverErr, ok := relayGatewayFailoverError(nil, 0).(*service.UpstreamFailoverError)
+	if !ok {
+		t.Fatalf("unexpected relay failover error type")
+	}
+	if failoverErr.StatusCode != http.StatusBadGateway || failoverErr.ClientStatusCode != http.StatusBadGateway {
+		t.Fatalf("missing relay status was not normalized: %#v", failoverErr)
 	}
 }
 

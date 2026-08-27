@@ -64,7 +64,7 @@ func (h *OpenAIGatewayHandler) forwardRelayOpenAIAccount(
 		return nil, relayGatewayFailoverError(account, statusCode)
 	}
 	defer func() { _ = response.Body.Close() }()
-	return forwardRelayOpenAIResponse(c, response, input, startedAt, streamStarted)
+	return forwardRelayOpenAIResponse(c, response, input, account, startedAt, streamStarted)
 }
 
 func (h *GatewayHandler) forwardRelayAccount(
@@ -178,9 +178,12 @@ func relayGatewayInboundRequest(ctx context.Context, c *gin.Context, input relay
 }
 
 func relayGatewayFailoverError(account *service.Account, upstreamStatus int) error {
+	if upstreamStatus < http.StatusBadRequest || upstreamStatus > 599 {
+		upstreamStatus = http.StatusBadGateway
+	}
 	retryableOnSameAccount := account != nil && account.IsPoolMode() && account.IsPoolModeRetryableStatus(upstreamStatus)
 	return &service.UpstreamFailoverError{
-		StatusCode:             http.StatusBadGateway,
+		StatusCode:             upstreamStatus,
 		ResponseBody:           []byte(`{"error":{"message":"Upstream request failed"}}`),
 		RetryableOnSameAccount: retryableOnSameAccount,
 		Stage:                  service.GatewayFailureStageInference,
@@ -243,6 +246,7 @@ func forwardRelayOpenAIResponse(
 	c *gin.Context,
 	response *http.Response,
 	input relayGatewayForwardInput,
+	account *service.Account,
 	startedAt time.Time,
 	streamStarted *bool,
 ) (*service.OpenAIForwardResult, error) {
@@ -271,7 +275,7 @@ func forwardRelayOpenAIResponse(
 	result.FirstTokenMs = firstTokenMs
 	if err != nil {
 		if errors.Is(err, service.ErrRelayUpstreamFailed) {
-			return result, relayGatewayFailoverError(nil, 0)
+			return result, relayGatewayFailoverError(account, 0)
 		}
 		return result, err
 	}
