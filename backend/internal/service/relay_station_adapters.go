@@ -1266,6 +1266,51 @@ func (s *RelayStationService) createSub2APIProxyToken(ctx context.Context, stati
 	return strings.TrimSpace(payload.Data.Key), nil
 }
 
+type relayForwardError struct {
+	stage string
+	err   error
+}
+
+func (e *relayForwardError) Error() string {
+	if e == nil || e.err == nil {
+		return "relay forwarding failed"
+	}
+	return e.err.Error()
+}
+
+func (e *relayForwardError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.err
+}
+
+func wrapRelayForwardError(stage string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &relayForwardError{stage: stage, err: err}
+}
+
+func relayForwardFailureStage(err error) string {
+	var forwardErr *relayForwardError
+	if errors.As(err, &forwardErr) && forwardErr.stage != "" {
+		return forwardErr.stage
+	}
+	return "unknown"
+}
+
+func relaySafeForwardErrorMessage(err error) string {
+	var statusErr *relayHTTPStatusError
+	if errors.As(err, &statusErr) {
+		return fmt.Sprintf("http status %d", statusErr.status)
+	}
+	if err == nil {
+		return ""
+	}
+	return "internal relay failure"
+}
+
 // Forward keeps the legacy adapter entry point for station-level tests.
 func (s *RelayStationService) Forward(ctx context.Context, route *RelayRoute, inbound *http.Request) (*http.Response, error) {
 	return s.ForwardAccount(ctx, nil, route, inbound)
@@ -1280,6 +1325,8 @@ func (s *RelayStationService) ForwardAccount(ctx context.Context, account *Accou
 	if err != nil {
 		fields := relayForwardDiagnosticFields(account, route, inbound)
 		fields = append(fields,
+			zap.String("failure_stage", relayForwardFailureStage(err)),
+			zap.String("error_message", relaySafeForwardErrorMessage(err)),
 			zap.String("error_type", fmt.Sprintf("%T", err)),
 			zap.Int64("duration_ms", time.Since(startedAt).Milliseconds()),
 		)
@@ -1291,13 +1338,23 @@ func (s *RelayStationService) ForwardAccount(ctx context.Context, account *Accou
 			rawRate := RelaySelectedRate(response.Header)
 			if rawRate == nil {
 				_ = response.Body.Close()
-				logger.L().Warn("managed AIHub response omitted valid selected rate", zap.String("station_id", relayRouteStationID(route)))
+				logger.L().Warn("managed AIHub response omitted valid selected rate",
+					zap.String("station_id", relayRouteStationID(route)),
+					zap.String("failure_stage", "validate_aihub_rate"),
+					zap.Int("upstream_status", response.StatusCode),
+					zap.String("upstream_content_type", response.Header.Get("Content-Type")),
+				)
 				return nil, relayUpstreamFailure(0)
 			}
 			effectiveRate, routeable := relayEffectiveRate(RelayStationRate{Rate: rawRate, Status: RelayRateStatusReady}, route.source)
 			if !routeable {
 				_ = response.Body.Close()
-				logger.L().Warn("managed AIHub selected rate is not routeable", zap.String("station_id", relayRouteStationID(route)))
+				logger.L().Warn("managed AIHub selected rate is not routeable",
+					zap.String("station_id", relayRouteStationID(route)),
+					zap.String("failure_stage", "validate_aihub_rate"),
+					zap.Int("upstream_status", response.StatusCode),
+					zap.String("upstream_content_type", response.Header.Get("Content-Type")),
+				)
 				return nil, relayUpstreamFailure(0)
 			}
 			response.Header.Set("x-aihub-auto-rate", strconv.FormatFloat(*rawRate, 'g', -1, 64))
@@ -1313,13 +1370,15 @@ func (s *RelayStationService) ForwardAccount(ctx context.Context, account *Accou
 			_ = response.Body.Close()
 			logger.L().Warn("relay upstream returned unsupported content encoding",
 				zap.String("station_id", relayRouteStationID(route)),
+				zap.String("failure_stage", "validate_response_encoding"),
+				zap.Int("upstream_status", response.StatusCode),
 				zap.String("content_encoding", encoding),
 			)
 			return nil, relayUpstreamFailure(0)
 		}
 		response.Header.Del("Content-Encoding")
 		contentType := strings.ToLower(response.Header.Get("Content-Type"))
-		if strings.Contains(contentType, "text/event-stream") {
+		if (relayRequestExpectsSSE(inbound) && !strings.Contains(contentType, "application/json")) || strings.Contains(contentType, "text/event-stream") {
 			response.Header.Set("Content-Type", "text/event-stream")
 			response.Body = newRelaySanitizedSSEBody(response.Body, inbound.URL.Path, relayRouteStationID(route))
 			return response, nil
@@ -1329,6 +1388,9 @@ func (s *RelayStationService) ForwardAccount(ctx context.Context, account *Accou
 		if readErr != nil {
 			logger.L().Warn("relay upstream response read failed",
 				zap.String("station_id", relayRouteStationID(route)),
+				zap.String("failure_stage", "read_response"),
+				zap.Int("upstream_status", response.StatusCode),
+				zap.String("upstream_content_type", response.Header.Get("Content-Type")),
 				zap.String("error_type", fmt.Sprintf("%T", readErr)),
 			)
 			return nil, relayUpstreamFailure(0)
@@ -1336,12 +1398,18 @@ func (s *RelayStationService) ForwardAccount(ctx context.Context, account *Accou
 		if len(body) > relayResponseSanitizeLimit {
 			logger.L().Warn("relay upstream success response exceeded sanitization limit",
 				zap.String("station_id", relayRouteStationID(route)),
+				zap.String("failure_stage", "validate_response_size"),
+				zap.Int("upstream_status", response.StatusCode),
+				zap.String("upstream_content_type", response.Header.Get("Content-Type")),
 			)
 			return nil, relayUpstreamFailure(0)
 		}
 		if !relayValidJSONSuccess(body, inbound.URL.Path) {
 			logger.L().Warn("relay upstream returned an invalid or failed successful-status payload",
 				zap.String("station_id", relayRouteStationID(route)),
+				zap.String("failure_stage", "validate_response_payload"),
+				zap.Int("upstream_status", response.StatusCode),
+				zap.String("upstream_content_type", response.Header.Get("Content-Type")),
 			)
 			return nil, relayUpstreamFailure(0)
 		}
@@ -1355,6 +1423,7 @@ func (s *RelayStationService) ForwardAccount(ctx context.Context, account *Accou
 	_ = response.Body.Close()
 	fields := relayForwardDiagnosticFields(account, route, inbound)
 	fields = append(fields,
+		zap.String("failure_stage", "upstream_http_status"),
 		zap.Int("upstream_status", response.StatusCode),
 		zap.String("upstream_content_type", response.Header.Get("Content-Type")),
 		zap.String("upstream_request_id", response.Header.Get("x-request-id")),
@@ -1450,6 +1519,7 @@ type relaySanitizedSSEBody struct {
 	body                  io.ReadCloser
 	reader                *bufio.Reader
 	stationID             string
+	requestPath           string
 	bufferResponsesOutput bool
 	clientOutputStarted   bool
 	preamble              []byte
@@ -1463,6 +1533,7 @@ func newRelaySanitizedSSEBody(body io.ReadCloser, path, stationID string) io.Rea
 		body:                  body,
 		reader:                bufio.NewReader(body),
 		stationID:             stationID,
+		requestPath:           path,
 		bufferResponsesOutput: strings.Contains(strings.ToLower(path), "/responses"),
 	}
 }
@@ -1473,6 +1544,8 @@ func (r *relaySanitizedSSEBody) Read(destination []byte) (int, error) {
 		if err != nil && !errors.Is(err, io.EOF) {
 			logger.L().Warn("relay upstream stream read failed",
 				zap.String("station_id", r.stationID),
+				zap.String("request_path", r.requestPath),
+				zap.String("failure_stage", "read_stream"),
 				zap.String("error_type", fmt.Sprintf("%T", err)),
 			)
 			r.failBeforeClientError()
@@ -1480,6 +1553,8 @@ func (r *relaySanitizedSSEBody) Read(destination []byte) (int, error) {
 			if relaySSEErrorEvent(event) {
 				logger.L().Warn("relay upstream returned a streaming error",
 					zap.String("station_id", r.stationID),
+					zap.String("request_path", r.requestPath),
+					zap.String("failure_stage", "stream_error_event"),
 				)
 				r.failBeforeClientError()
 			} else if r.bufferResponsesOutput && !r.clientOutputStarted {
@@ -1487,6 +1562,8 @@ func (r *relaySanitizedSSEBody) Read(destination []byte) (int, error) {
 				if relayResponsesSSETerminatedWithoutOutput(data, eventType) {
 					logger.L().Warn("relay upstream returned an empty Responses stream",
 						zap.String("station_id", r.stationID),
+						zap.String("request_path", r.requestPath),
+						zap.String("failure_stage", "empty_responses_stream"),
 					)
 					r.failBeforeClientError()
 				} else if openAIStreamDataStartsClientOutput(string(data), eventType) {
@@ -1497,6 +1574,8 @@ func (r *relaySanitizedSSEBody) Read(destination []byte) (int, error) {
 				} else if len(r.preamble)+len(event) > relaySSEEventLimit {
 					logger.L().Warn("relay upstream Responses preamble exceeded sanitization limit",
 						zap.String("station_id", r.stationID),
+						zap.String("request_path", r.requestPath),
+						zap.String("failure_stage", "responses_preamble_limit"),
 					)
 					r.failBeforeClientError()
 				} else {
@@ -1644,7 +1723,7 @@ func relayJSONErrorPayload(payload []byte) bool {
 // Authorization or cookie headers to an upstream relay.
 func (s *RelayStationService) forward(ctx context.Context, account *Account, route *RelayRoute, inbound *http.Request) (*http.Response, error) {
 	if route == nil || inbound == nil || inbound.URL == nil {
-		return nil, errors.New("relay request is invalid")
+		return nil, wrapRelayForwardError("validate_request", errors.New("relay request is invalid"))
 	}
 	station := route.station
 	if station.Type == RelayStationTypeAIHub {
@@ -1652,14 +1731,14 @@ func (s *RelayStationService) forward(ctx context.Context, account *Account, rou
 	}
 	target, err := relayProxyTarget(station.BaseURL, inbound.URL.Path, relayForwardQuery(inbound.URL.Query()).Encode())
 	if err != nil {
-		return nil, err
+		return nil, wrapRelayForwardError("build_target", err)
 	}
 	if err := s.validateRelayTargetURL(target); err != nil {
-		return nil, err
+		return nil, wrapRelayForwardError("validate_target", err)
 	}
 	outbound, err := http.NewRequestWithContext(ctx, inbound.Method, target, inbound.Body)
 	if err != nil {
-		return nil, err
+		return nil, wrapRelayForwardError("build_request", err)
 	}
 	outbound.ContentLength = inbound.ContentLength
 	copyRelayHeaders(outbound.Header, inbound.Header)
@@ -1671,7 +1750,7 @@ func (s *RelayStationService) forward(ctx context.Context, account *Account, rou
 		runtimeID := relayAIHubRuntimeID(station.ID, route.source.PolicyKey)
 		policy := relayAIHubPolicyForSource(route.source)
 		if _, err := s.activateAIHubStation(ctx, station, runtimeID, &policy, false); err != nil {
-			return nil, err
+			return nil, wrapRelayForwardError("activate_aihub", err)
 		}
 		if token := strings.TrimSpace(station.ProxyToken); token != "" {
 			outbound.Header.Set("Authorization", "Bearer "+token)
@@ -1683,22 +1762,30 @@ func (s *RelayStationService) forward(ctx context.Context, account *Account, rou
 		outbound.Header.Set("X-Sub2api-Group", route.source.SourceGroup)
 		route.runtimeID = runtimeID
 		// #nosec G704 -- target passed validateRelayTargetURL before request construction.
-		return newRelayProxyClient().Do(outbound)
+		response, err := newRelayProxyClient().Do(outbound)
+		if err != nil {
+			return nil, wrapRelayForwardError("send_request", err)
+		}
+		return response, nil
 	}
 
 	proxyToken := strings.TrimSpace(station.ProxyToken)
 	if proxyToken == "" {
 		proxyToken, err = s.relayProxyToken(ctx, station, route.source)
 		if err != nil {
-			return nil, infraerrors.New(http.StatusBadGateway, "RELAY_PROXY_TOKEN_UNAVAILABLE", err.Error())
+			return nil, wrapRelayForwardError("resolve_proxy_token", infraerrors.New(http.StatusBadGateway, "RELAY_PROXY_TOKEN_UNAVAILABLE", err.Error()))
 		}
 	}
 	if proxyToken == "" {
-		return nil, infraerrors.New(http.StatusBadGateway, "RELAY_PROXY_TOKEN_REQUIRED", "relay station has no usable API key")
+		return nil, wrapRelayForwardError("resolve_proxy_token", infraerrors.New(http.StatusBadGateway, "RELAY_PROXY_TOKEN_REQUIRED", "relay station has no usable API key"))
 	}
 	outbound.Header.Set("Authorization", "Bearer "+proxyToken)
 	// #nosec G704 -- target passed validateRelayTargetURL before request construction.
-	return newRelayProxyClient().Do(outbound)
+	response, err := newRelayProxyClient().Do(outbound)
+	if err != nil {
+		return nil, wrapRelayForwardError("send_request", err)
+	}
+	return response, nil
 }
 
 // RelaySelectedRate returns trusted same-decision metadata after ForwardAccount
